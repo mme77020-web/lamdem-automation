@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 import pytz
 
-# רשימת המשתמשים (השאר את המלאה שלך)
+# רשימת המשתמשים שלך (השאר את כל ה-15 כאן)
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"} 
 
 def run_process(user_id, user_pass, log_box):
@@ -18,21 +18,20 @@ def run_process(user_id, user_pass, log_box):
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu") # עוזר למניעת שגיאה 127
+    options.add_argument("--disable-gpu")
     
     try:
-        # שינוי קטן בדרך שבה הדרייבר נטען לענן
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        
         driver.get("https://chabad.lamdem.co.il/auth/login")
         time.sleep(5)
+        
         driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='identifier']").send_keys(str(user_id))
         driver.find_element(By.ID, "pwd").send_keys(str(user_pass) + Keys.RETURN)
-        log_box.info(f"🔄 בתהליך עבודה עבור: {user_id}")
+        log_box.info(f"🔄 מתחיל עבודה עבור: {user_id}")
         time.sleep(10)
         
-        # כאן הלוגיקה של 3 השיעורים...
+        # לוגיקת 3 שיעורים...
         
         driver.quit()
         return True
@@ -41,7 +40,6 @@ def run_process(user_id, user_pass, log_box):
         log_box.error(f"❌ שגיאה עבור {user_id}: {e}")
         return False
 
-# ממשק
 st.title("🤖 מערכת אוטומציה למדם")
 
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -56,9 +54,9 @@ if not st.session_state.logged_in:
 else:
     file = st.file_uploader("העלה אקסל", type="xlsx")
     
-    # אפשרות לבחירת מספר ימים
+    # --- הוספת אפשרות לבחירת מספר ימים ---
     days_options = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
-    selected_days = st.multiselect("בחר ימי פעילות (ניתן לבחור כמה):", days_options, default=["שני"])
+    selected_days = st.multiselect("בחר ימי פעילות:", days_options, default=["שני"])
     
     target_time = st.time_input("בחר שעת תחילת עבודה")
     
@@ -81,9 +79,9 @@ else:
             
             st.warning(f"המערכת ממתינה לשעה {target_time.strftime('%H:%M')} בימים: {', '.join(selected_days)}")
             while True:
-                now = datetime.now(israel_tz)
-                if now.strftime("%A") in eng_days and now.strftime("%H:%M") == target_time.strftime("%H:%M"):
+                now_israel = datetime.now(israel_tz)
+                if now_israel.strftime("%A") in eng_days and now_israel.strftime("%H:%M") == target_time.strftime("%H:%M"):
                     for index, row in df.iterrows():
                         run_process(row[0], row[1], log_box)
-                    time.sleep(70)
+                    time.sleep(70) # מונע הרצה כפולה באותה דקה
                 time.sleep(30)
