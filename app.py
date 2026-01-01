@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 import pytz
 
-# רשימת המשתמשים שלך (השאר את כל ה-15 כאן)
+# רשימת המשתמשים שלך (השאר את המלאה)
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"} 
 
 def run_process(user_id, user_pass, log_box):
@@ -25,19 +25,16 @@ def run_process(user_id, user_pass, log_box):
         driver = webdriver.Chrome(service=service, options=options)
         driver.get("https://chabad.lamdem.co.il/auth/login")
         time.sleep(5)
-        
         driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='identifier']").send_keys(str(user_id))
         driver.find_element(By.ID, "pwd").send_keys(str(user_pass) + Keys.RETURN)
-        log_box.info(f"🔄 מתחיל עבודה עבור: {user_id}")
+        log_box.info(f"🔄 עובד על תלמיד: {user_id}")
         time.sleep(10)
-        
-        # לוגיקת 3 שיעורים...
-        
+        # לוגיקת סרטונים...
         driver.quit()
         return True
     except Exception as e:
         if 'driver' in locals(): driver.quit()
-        log_box.error(f"❌ שגיאה עבור {user_id}: {e}")
+        log_box.error(f"❌ שגיאה: {e}")
         return False
 
 st.title("🤖 מערכת אוטומציה למדם")
@@ -54,9 +51,9 @@ if not st.session_state.logged_in:
 else:
     file = st.file_uploader("העלה אקסל", type="xlsx")
     
-    # --- הוספת אפשרות לבחירת מספר ימים ---
-    days_options = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
-    selected_days = st.multiselect("בחר ימי פעילות:", days_options, default=["שני"])
+    # --- כאן בחירת הימים שביקשת ---
+    days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+    selected_days = st.multiselect("בחר ימי פעילות:", days_list, default=["שני"])
     
     target_time = st.time_input("בחר שעת תחילת עבודה")
     
@@ -73,15 +70,14 @@ else:
             df = pd.read_excel(file, header=None)
             log_box = st.empty()
             israel_tz = pytz.timezone('Asia/Jerusalem')
-            
             day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
             eng_days = [day_map[d] for d in selected_days]
             
-            st.warning(f"המערכת ממתינה לשעה {target_time.strftime('%H:%M')} בימים: {', '.join(selected_days)}")
+            st.warning(f"הממתין לשעה {target_time.strftime('%H:%M')} בימים: {', '.join(selected_days)}")
             while True:
-                now_israel = datetime.now(israel_tz)
-                if now_israel.strftime("%A") in eng_days and now_israel.strftime("%H:%M") == target_time.strftime("%H:%M"):
+                now = datetime.now(israel_tz)
+                if now.strftime("%A") in eng_days and now.strftime("%H:%M") == target_time.strftime("%H:%M"):
                     for index, row in df.iterrows():
                         run_process(row[0], row[1], log_box)
-                    time.sleep(70) # מונע הרצה כפולה באותה דקה
+                    time.sleep(70)
                 time.sleep(30)
