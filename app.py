@@ -13,11 +13,10 @@ import pytz
 
 # --- הגדרות קבועות ---
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
-PASSWORD_DEFAULT = "A!1234"
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
 def solve_lesson_video(driver, log_box):
-    """טיפול בנגן הוידאו והרצה לסוף - מבוסס על הקוד המנצח שלך"""
+    """טיפול בנגן הוידאו והרצה לסוף"""
     time.sleep(12) 
     
     def try_play_and_skip(d):
@@ -46,7 +45,6 @@ def solve_lesson_video(driver, log_box):
             return True
         except: return False
 
-    # בדיקה בדף הראשי ובתוך iframes
     if not try_play_and_skip(driver):
         for frame in driver.find_elements(By.TAG_NAME, "iframe"):
             try:
@@ -63,8 +61,8 @@ def solve_lesson_video(driver, log_box):
             log_box.success("✅ בוצע סימון כהושלם")
     except: pass
 
-def run_process(username, log_box):
-    """ביצוע 3 שיעורי וידאו עבור תלמיד אחד - גרסת הענן"""
+def run_process(username, password, log_box):
+    """ביצוע 3 שיעורים עבור תלמיד עם סיסמה מהאקסל"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -78,14 +76,12 @@ def run_process(username, log_box):
         driver = webdriver.Chrome(service=service, options=options)
         wait = WebDriverWait(driver, 25)
 
-        # התחברות
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
-        driver.find_element(By.ID, "pwd").send_keys(PASSWORD_DEFAULT + Keys.RETURN)
+        driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
         log_box.info(f"👤 מחובר לתלמיד: {username}")
         time.sleep(10)
 
-        # כניסה לקורס
         enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
         driver.execute_script("arguments[0].click();", enter_btn)
         time.sleep(12)
@@ -123,13 +119,6 @@ def run_process(username, log_box):
                 driver.execute_script("arguments[0].click();", target_lesson)
                 time.sleep(8)
                 
-                if driver.current_url == course_url:
-                    try:
-                        inner_text_element = target_lesson.find_element(By.XPATH, f".//*[contains(text(), '{lesson_name}')]")
-                        driver.execute_script("arguments[0].click();", inner_text_element)
-                        time.sleep(8)
-                    except: pass
-
                 if driver.current_url != course_url:
                     solve_lesson_video(driver, log_box)
                 else:
@@ -144,7 +133,7 @@ def run_process(username, log_box):
         log_box.error(f"❌ שגיאה עבור {username}: {str(e)}")
         return False
 
-# --- ממשק Streamlit ---
+# --- ממשק ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
 st.markdown("<h1 style='text-align: right;'>🤖 מערכת אוטומציה למדם</h1>", unsafe_allow_html=True)
 
@@ -159,16 +148,16 @@ if not st.session_state.logged_in:
             st.session_state.logged_in = True
             st.rerun()
 else:
-    file = st.file_uploader("העלה אקסל", type="xlsx")
+    file = st.file_uploader("העלה אקסל (עמודה A משתמש, עמודה B סיסמה)", type="xlsx")
     days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
     selected_days = st.multiselect("בחר ימי פעילות:", days_list, default=["שני"])
     target_time = st.time_input("בחר שעת תחילת עבודה")
 
     if file:
         df = pd.read_excel(file, header=None)
-        # שינוי כאן: לוקח את עמודה B (אינדקס 1) כפי שמופיע בקוד המקורי שלך
-        user_list = df.iloc[:, 1].dropna().astype(str).tolist()
-        total_students = len(user_list)
+        # תיקון: עמודה A (אינדקס 0) היא המשתמש, עמודה B (אינדקס 1) היא הסיסמה
+        students_data = df.dropna(subset=[0, 1])
+        total_students = len(students_data)
         st.success(f"📋 נטענו {total_students} תלמידים.")
 
         log_box = st.empty()
@@ -177,9 +166,11 @@ else:
 
         if st.button("🚀 הפעל עכשיו (בדיקה)"):
             completed = 0
-            for user_id in user_list:
+            for index, row in students_data.iterrows():
+                username = str(row[0]).strip()
+                password = str(row[1]).strip()
                 status_text.write(f"🔄 מעבד תלמיד {completed + 1} מתוך {total_students}...")
-                if run_process(user_id.strip(), log_box):
+                if run_process(username, password, log_box):
                     completed += 1
                 progress_bar.progress(completed / total_students)
             st.success(f"✅ סיום! {completed} תלמידים הושלמו.")
@@ -194,8 +185,8 @@ else:
                 now = datetime.now(israel_tz)
                 if now.strftime("%A") in eng_days and now.strftime("%H:%M") == target_time.strftime("%H:%M"):
                     completed = 0
-                    for user_id in user_list:
-                        run_process(user_id.strip(), log_box)
+                    for index, row in students_data.iterrows():
+                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box)
                         completed += 1
                         progress_bar.progress(completed / total_students)
                     time.sleep(70)
