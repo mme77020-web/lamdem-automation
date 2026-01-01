@@ -5,7 +5,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 from datetime import datetime
 import pytz
@@ -21,7 +20,7 @@ def run_process(user_id, user_pass, log_box):
     options.add_argument("--disable-gpu")
     
     try:
-        service = Service(ChromeDriverManager().install())
+        service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=options)
         driver.get("https://chabad.lamdem.co.il/auth/login")
         time.sleep(5)
@@ -81,3 +80,4 @@ else:
                         run_process(row[0], row[1], log_box)
                     time.sleep(70)
                 time.sleep(30)
+
