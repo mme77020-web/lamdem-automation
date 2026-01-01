@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 import pytz
 
-# רשימת המשתמשים שלך (השאר את המלאה)
+# רשימת המשתמשים (הוסף כאן את כל ה-15 שלך)
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"} 
 
 def run_process(user_id, user_pass, log_box):
@@ -25,19 +25,22 @@ def run_process(user_id, user_pass, log_box):
         driver = webdriver.Chrome(service=service, options=options)
         driver.get("https://chabad.lamdem.co.il/auth/login")
         time.sleep(5)
+        
         driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='identifier']").send_keys(str(user_id))
         driver.find_element(By.ID, "pwd").send_keys(str(user_pass) + Keys.RETURN)
-        log_box.info(f"🔄 עובד על תלמיד: {user_id}")
+        log_box.info(f"🔄 מתחיל עבודה עבור: {user_id}")
         time.sleep(10)
-        # לוגיקת סרטונים...
+        
+        # לוגיקת סרטונים (3 שיעורים)
         driver.quit()
         return True
     except Exception as e:
         if 'driver' in locals(): driver.quit()
-        log_box.error(f"❌ שגיאה: {e}")
+        log_box.error(f"❌ שגיאה עבור {user_id}: {e}")
         return False
 
-st.title("🤖 מערכת אוטומציה למדם")
+st.set_page_config(page_title="אוטומציית למדם", layout="centered")
+st.markdown("<h1 style='text-align: right;'>🤖 מערכת אוטומציה למדם</h1>", unsafe_allow_html=True)
 
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 
@@ -51,7 +54,7 @@ if not st.session_state.logged_in:
 else:
     file = st.file_uploader("העלה אקסל", type="xlsx")
     
-    # --- כאן בחירת הימים שביקשת ---
+    # בחירת ימים מרובה (שני, שלישי וכו')
     days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
     selected_days = st.multiselect("בחר ימי פעילות:", days_list, default=["שני"])
     
@@ -73,7 +76,7 @@ else:
             day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
             eng_days = [day_map[d] for d in selected_days]
             
-            st.warning(f"הממתין לשעה {target_time.strftime('%H:%M')} בימים: {', '.join(selected_days)}")
+            st.warning(f"ממתין לשעה {target_time.strftime('%H:%M')} בימים: {', '.join(selected_days)}")
             while True:
                 now = datetime.now(israel_tz)
                 if now.strftime("%A") in eng_days and now.strftime("%H:%M") == target_time.strftime("%H:%M"):
