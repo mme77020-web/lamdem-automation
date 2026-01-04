@@ -16,13 +16,13 @@ import os
 import json
 import threading
 
-# --- הגדרות קבועות ---
+# --- הגדרות ---
 CONFIG_FILE = "bot_config.json"
 DATA_STORAGE = "stored_students.xlsx"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 
-# --- פונקציית לוגים (כותבת לקובץ ולמסך) ---
+# --- לוגים ---
 def write_log(msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] {msg}"
@@ -49,7 +49,7 @@ def load_data():
         except: pass
     return settings
 
-# --- הלוגיקה שלך (מתוך הסקריפט שצירפת) ---
+# --- הלוגיקה שלך מהקוד שעבד ---
 def solve_lesson_video(driver):
     """טיפול בנגן הוידאו (כולל iframes) והרצה לסוף"""
     time.sleep(12) 
@@ -106,25 +106,24 @@ def run_single_student(username, password, num_videos):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--mute-audio")
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    # שימוש בנתיב המותקן בשרת
-    options.binary_location = "/usr/bin/chromium"
+    options.binary_location = "/usr/bin/chromium" # חובה בשרת
     
     driver = None
     try:
-        # תיקון קריטי: שימוש ב-ChromeDriverManager מסוג Chromium כדי להתאים לגרסת השרת
+        # --- התיקון הקריטי: שימוש ב-ChromeType.CHROMIUM ---
+        # זה מוריד אוטומטית את הדרייבר שמתאים לגרסה 143 שבשרת
         service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
         driver = webdriver.Chrome(service=service, options=options)
-        driver.maximize_window() # חשוב ללוגיקה שלך
-        wait = WebDriverWait(driver, 25)
         
+        wait = WebDriverWait(driver, 25)
+
         # התחברות
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
         write_log(f"👤 מחובר: {username}")
         time.sleep(10)
-        
+
         # כניסה לקורס
         try:
             enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
@@ -176,7 +175,8 @@ def run_single_student(username, password, num_videos):
                     except: pass
                 
                 if driver.current_url != course_url:
-                    solve_lesson_video(driver)
+                    if not solve_lesson_video(driver):
+                         blacklist.append(lesson_name)
                 else:
                     write_log("⚠️ לא הצלחתי להיכנס לשיעור.")
                     blacklist.append(lesson_name)
@@ -190,7 +190,7 @@ def run_single_student(username, password, num_videos):
         write_log(f"❌ קריסה בבוט עבור {username}: {e}")
         if driver: driver.quit()
 
-# --- מנוע תזמון (רץ ברקע) ---
+# --- מנוע תזמון ---
 def scheduler():
     tz = pytz.timezone('Asia/Jerusalem')
     day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
@@ -223,13 +223,12 @@ if "sched" not in st.session_state:
 
 # --- ממשק משתמש ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 מערכת אוטומציה למדם (Persistent)")
+st.title("🤖 מערכת אוטומציה למדם")
 
 curr_conf = load_data()
 
-# הצגת סטטוס
 if os.path.exists(DATA_STORAGE):
-    st.success("✅ קובץ נתונים שמור בשרת (חסין סגירה).")
+    st.success("✅ קובץ נתונים שמור בשרת.")
 else:
     st.warning("⚠️ לא נמצא קובץ נתונים. נא להעלות ולשמור.")
 
@@ -244,7 +243,7 @@ with col2:
 vids = st.slider("כמות שיעורים לתלמיד", 1, 10, value=curr_conf["videos"])
 file = st.file_uploader("עדכון קובץ אקסל (A=משתמש, B=סיסמה)", type="xlsx")
 
-if st.button("💾 שמור הגדרות וקובץ (חובה ללחוץ!)"):
+if st.button("💾 שמור הגדרות וקובץ"):
     save_data(days, t_input, vids, file)
     st.rerun()
 
@@ -258,7 +257,7 @@ with col_a:
             first = df.iloc[0]
             st.info(f"מריץ על {first[0]}...")
             run_single_student(str(first[0]).strip(), str(first[1]).strip(), vids)
-            st.success("הבדיקה הסתיימה, בדוק את היומן למטה.")
+            st.success("בדיקה הסתיימה.")
         else:
             st.error("אין קובץ שמור.")
 
@@ -271,6 +270,7 @@ st.subheader("📝 יומן פעילות")
 log_content = "ממתין לפעילות..."
 if os.path.exists(LOG_FILE):
     with open(LOG_FILE, "r", encoding="utf-8") as f:
-        log_content = "".join(f.readlines()[::-1])
+        lines = f.readlines()
+        if lines: log_content = "".join(lines[::-1])
 
 st.text_area("לוגים:", value=log_content, height=300)
