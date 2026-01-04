@@ -45,7 +45,6 @@ def solve_lesson_video(driver, log_box):
             return True
         except: return False
 
-    # בדיקה בדף הראשי ובתוך iframes (כפי שהיה בקוד שעבד לך)
     if not try_play_and_skip(driver):
         for frame in driver.find_elements(By.TAG_NAME, "iframe"):
             try:
@@ -60,12 +59,13 @@ def solve_lesson_video(driver, log_box):
         if complete_btn:
             driver.execute_script("arguments[0].click();", complete_btn[0])
             log_box.success("✅ בוצע סימון כהושלם")
-            time.sleep(3) # זמן למערכת לעכל את הלחיצה
+            time.sleep(3)
     except: pass
 
-def run_process(username, password, log_box):
+# עדכון: הוספת הפרמטר num_videos לפונקציה
+def run_process(username, password, log_box, num_videos):
     options = Options()
-    options.add_argument("--headless") # חובה בשרת, אם זה לא עובד ננסה להסיר
+    options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--mute-audio")
@@ -77,14 +77,12 @@ def run_process(username, password, log_box):
         driver = webdriver.Chrome(service=service, options=options)
         wait = WebDriverWait(driver, 25)
 
-        # התחברות
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
         log_box.info(f"👤 מחובר: {username}")
         time.sleep(10)
 
-        # כניסה לקורס
         enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
         driver.execute_script("arguments[0].click();", enter_btn)
         time.sleep(12)
@@ -92,7 +90,8 @@ def run_process(username, password, log_box):
         course_url = driver.current_url
         blacklist = []
 
-        for i in range(3): 
+        # עדכון: שימוש בפרמטר num_videos במקום המספר הקבוע 3
+        for i in range(num_videos): 
             driver.get(course_url)
             time.sleep(10)
             
@@ -111,10 +110,10 @@ def run_process(username, password, log_box):
                         break
 
             if not target_lesson:
-                log_box.warning(f"🏁 אין שיעורים ל-{username}")
+                log_box.warning(f"🏁 אין שיעורים נוספים ל-{username}")
                 break
 
-            log_box.info(f"📺 [{i+1}/3] מבצע: {lesson_name}")
+            log_box.info(f"📺 [{i+1}/{num_videos}] מבצע: {lesson_name}")
             
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_lesson)
@@ -122,7 +121,6 @@ def run_process(username, password, log_box):
                 driver.execute_script("arguments[0].click();", target_lesson)
                 time.sleep(8)
                 
-                # גיבוי לחיצה אם לא עבר דף (מהקוד הישן שלך)
                 if driver.current_url == course_url:
                     try:
                         inner_text_element = target_lesson.find_element(By.XPATH, f".//*[contains(text(), '{lesson_name}')]")
@@ -160,13 +158,16 @@ if not st.session_state.logged_in:
             st.rerun()
 else:
     file = st.file_uploader("העלה אקסל (A: תלמיד, B: סיסמה)", type="xlsx")
+    
+    # הוספת כפתור בחירה לכמות סרטונים (שינוי בממשק)
+    num_videos_to_solve = st.slider("כמות סרטונים לכל תלמיד:", min_value=1, max_value=10, value=3)
+    
     days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
     selected_days = st.multiselect("ימי פעילות:", days_list)
     target_time = st.time_input("שעת תחילת עבודה")
 
     if file:
         df = pd.read_excel(file, header=None)
-        # עמודה 0 (A) משתמש, עמודה 1 (B) סיסמה
         students_data = df.dropna(subset=[0, 1])
         total_students = len(students_data)
         st.info(f"נטענו {total_students} תלמידים.")
@@ -181,7 +182,8 @@ else:
                 username = str(row[0]).strip()
                 password = str(row[1]).strip()
                 status_text.write(f"מעבד {username} ({completed + 1}/{total_students})...")
-                if run_process(username, password, log_box):
+                # העברת המשתנה החדש לפונקציה
+                if run_process(username, password, log_box, num_videos_to_solve):
                     completed += 1
                 progress_bar.progress(completed / total_students)
             st.success("🏁 הסבב הסתיים!")
@@ -193,6 +195,7 @@ else:
                 now = datetime.now(israel_tz)
                 if now.strftime("%H:%M") == target_time.strftime("%H:%M"):
                     for index, row in students_data.iterrows():
-                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box)
+                        # העברת המשתנה החדש לפונקציה בתוך התזמון
+                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos_to_solve)
                     time.sleep(70)
                 time.sleep(30)
