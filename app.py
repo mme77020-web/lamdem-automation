@@ -14,30 +14,33 @@ import os
 import json
 import threading
 
-# --- הגדרות אחסון בשרת ---
+# --- הגדרות אחסון קבועות ---
 CONFIG_FILE = "bot_config.json"
 DATA_STORAGE = "stored_students.xlsx"
+LOG_FILE = "execution_log.txt"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
-# פונקציות לשמירת המצב (כדי שלא יימחק בסגירת חלונית)
+def add_to_log(message):
+    timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {message}\n")
+
 def save_settings(days, target_time, num_videos):
     with open(CONFIG_FILE, "w") as f:
-        json.dump({
-            "days": days,
-            "time": target_time.strftime("%H:%M"),
-            "num_videos": num_videos
-        }, f)
+        json.dump({"days": days, "time": target_time.strftime("%H:%M"), "num_videos": num_videos}, f)
 
 def load_settings():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            data = json.load(f)
-            return data["days"], datetime.strptime(data["time"], "%H:%M").time(), data["num_videos"]
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                return data["days"], datetime.strptime(data["time"], "%H:%M").time(), data["num_videos"]
+        except: pass
     return [], datetime.now().time(), 3
 
-# --- הלוגיקה המקורית שלך (מיועדת לעבודה בענן) ---
-def solve_lesson_video(driver, log_box):
+# --- לוגיקת הבוט המנצחת שלך ---
+def solve_lesson_video(driver):
     time.sleep(12) 
     def try_play_and_skip(d):
         try:
@@ -61,10 +64,13 @@ def solve_lesson_video(driver, log_box):
     time.sleep(10)
     try:
         btn = driver.find_elements(By.XPATH, "//button[contains(., 'סימון כהושלם')]")
-        if btn: driver.execute_script("arguments[0].click();", btn[0]); log_box.success("✅ סומן כהושלם")
+        if btn: 
+            driver.execute_script("arguments[0].click();", btn[0])
+            return True
     except: pass
+    return False
 
-def run_bot_instance(username, password, num_videos, log_box):
+def run_bot_instance(username, password, num_videos, status_container=None):
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -86,44 +92,54 @@ def run_bot_instance(username, password, num_videos, log_box):
         time.sleep(12)
         
         course_url = driver.current_url
+        success_count = 0
         for i in range(num_videos):
             driver.get(course_url); time.sleep(10)
             items = driver.find_elements(By.TAG_NAME, "mat-list-item")
             for it in items:
                 html = it.get_attribute("innerHTML")
                 if "play_circle" in html and "check_circle" not in html:
-                    log_box.info(f"📺 תלמיד {username}: מבצע שיעור {i+1}")
+                    if status_container: status_container.info(f"📺 {username}: מבצע שיעור {i+1}")
                     driver.execute_script("arguments[0].click();", it)
                     time.sleep(8)
-                    if driver.current_url != course_url: solve_lesson_video(driver, log_box)
+                    if driver.current_url != course_url: 
+                        if solve_lesson_video(driver): success_count += 1
                     break
+        
+        add_to_log(f"תלמיד {username}: הושלמו {success_count} שיעורים.")
         driver.quit()
+        return True
     except Exception as e:
+        add_to_log(f"שגיאה בתלמיד {username}: {str(e)}")
         if driver: driver.quit()
-        log_box.error(f"❌ שגיאה ב-{username}: {str(e)}")
+        return False
 
-# --- מנוע תזמון (רץ ברקע של השרת) ---
+# --- מנוע תזמון רקע ---
 def scheduler_loop():
     israel_tz = pytz.timezone('Asia/Jerusalem')
     day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
     while True:
-        if os.path.exists(CONFIG_FILE) and os.path.exists(DATA_STORAGE):
-            days, t_time, n_vids = load_settings()
-            now = datetime.now(israel_tz)
-            if now.strftime("%A") in [day_map[d] for d in days] and now.strftime("%H:%M") == t_time.strftime("%H:%M"):
-                df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
-                for _, row in df.iterrows():
-                    run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), n_vids, st.empty())
-                time.sleep(70)
+        try:
+            if os.path.exists(CONFIG_FILE) and os.path.exists(DATA_STORAGE):
+                days, t_time, n_vids = load_settings()
+                now = datetime.now(israel_tz)
+                if now.strftime("%A") in [day_map[d] for d in days] and now.strftime("%H:%M") == t_time.strftime("%H:%M"):
+                    add_to_log("⏰ זמן תזמון הגיע - מתחיל הרצה אוטומטית...")
+                    df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
+                    for _, row in df.iterrows():
+                        run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), n_vids)
+                    time.sleep(70)
+        except Exception as e:
+            add_to_log(f"שגיאה במנוע התזמון: {str(e)}")
         time.sleep(30)
 
 if "bg_task" not in st.session_state:
     threading.Thread(target=scheduler_loop, daemon=True).start()
     st.session_state.bg_task = True
 
-# --- ממשק המערכת ---
+# --- ממשק משתמש ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 מערכת אוטומציה למדם (Persistent)")
+st.title("🤖 מערכת אוטומציה למדם")
 
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 
@@ -136,20 +152,38 @@ if not st.session_state.logged_in:
 else:
     s_days, s_time, s_vids = load_settings()
     
+    st.subheader("⚙️ הגדרות")
+    sel_days = st.multiselect("ימי פעילות:", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=s_days)
+    sel_time = st.time_input("שעת התחלה:", value=s_time)
+    sel_vids = st.slider("סרטונים לתלמיד:", 1, 10, value=s_vids)
+    file = st.file_uploader("העלה אקסל מעודכן", type="xlsx")
+
     col1, col2 = st.columns(2)
     with col1:
-        sel_days = st.multiselect("ימי פעילות:", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=s_days)
-    with col2:
-        sel_time = st.time_input("שעת התחלה:", value=s_time)
+        if st.button("💾 שמור הגדרות"):
+            save_settings(sel_days, sel_time, sel_vids)
+            if file:
+                with open(DATA_STORAGE, "wb") as f: f.write(file.getbuffer())
+            st.success("✅ נשמר!")
     
-    sel_vids = st.slider("סרטונים לתלמיד:", 1, 10, value=s_vids)
-    file = st.file_uploader("העלה אקסל (A: משתמש, B: סיסמה)", type="xlsx")
+    with col2:
+        if st.button("🚀 הפעל עכשיו"):
+            if os.path.exists(DATA_STORAGE):
+                df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
+                progress = st.progress(0)
+                status = st.empty()
+                for i, row in enumerate(df.iterrows()):
+                    row = row[1]
+                    status.info(f"מעבד תלמיד {i+1} מתוך {len(df)}...")
+                    run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), sel_vids, status)
+                    progress.progress((i + 1) / len(df))
+                st.success("🏁 סבב ידני הסתיים!")
+            else:
+                st.error("לא נמצא קובץ אקסל שמור. העלה קובץ ולחץ על שמור.")
 
-    if st.button("💾 שמור והפעל תזמון"):
-        save_settings(sel_days, sel_time, sel_vids)
-        if file:
-            with open(DATA_STORAGE, "wb") as f: f.write(file.getbuffer())
-        st.success("✅ הנתונים נשמרו! המערכת תפעל ברקע גם אם תסגור את הכרטיסייה.")
-
-    if os.path.exists(DATA_STORAGE):
-        st.info("📊 קיימים נתונים שמורים בשרת. הבוט יפעל לפי התזמון האחרון ששמרת.")
+    st.divider()
+    st.subheader("📝 יומן פעילות אחרון")
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            logs = f.readlines()
+            st.text_area("הודעות מהבוט:", value="".join(logs[-10:]), height=200) # מראה 10 שורות אחרונות
