@@ -11,11 +11,12 @@ import time
 from datetime import datetime
 import pytz
 
-# --- הגדרות ---
+# --- הגדרות מערכת ---
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
 def solve_lesson_video(driver, log_box):
+    """מנגנון צפייה בוידאו ודילוג לסוף מהקוד המקורי שלך"""
     time.sleep(12) 
     def try_play_and_skip(d):
         try:
@@ -44,6 +45,7 @@ def solve_lesson_video(driver, log_box):
         if complete_btn:
             driver.execute_script("arguments[0].click();", complete_btn[0])
             log_box.success("✅ בוצע סימון כהושלם")
+            time.sleep(3)
     except: pass
 
 def run_process(username, password, log_box, num_videos):
@@ -52,6 +54,7 @@ def run_process(username, password, log_box, num_videos):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--mute-audio")
+    # הגדרת נתיב הדפדפן בשרת Streamlit
     options.binary_location = "/usr/bin/chromium"
     
     driver = None
@@ -63,6 +66,7 @@ def run_process(username, password, log_box, num_videos):
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
+        log_box.info(f"👤 מחובר: {username}")
         time.sleep(10)
 
         enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
@@ -87,9 +91,11 @@ def run_process(username, password, log_box, num_videos):
                         target_lesson = it
                         break
 
-            if not target_lesson: break
-            
-            log_box.info(f"📺 [{i+1}/{num_videos}] עובד על: {lesson_name}")
+            if not target_lesson:
+                log_box.warning(f"🏁 אין יותר שיעורים ל-{username}")
+                break
+
+            log_box.info(f"📺 [{i+1}/{num_videos}] מבצע: {lesson_name}")
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_lesson)
             time.sleep(2)
             driver.execute_script("arguments[0].click();", target_lesson)
@@ -103,17 +109,16 @@ def run_process(username, password, log_box, num_videos):
         driver.quit()
         return True
     except Exception as e:
-        if driver:
-            st.image(driver.get_screenshot_as_png(), caption="צילום מסך של השגיאה")
-            driver.quit()
+        if driver: driver.quit()
         log_box.error(f"❌ שגיאה עבור {username}: {str(e)}")
         return False
 
-# --- ממשק משתמש ---
+# --- ממשק ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 מערכת אוטומציה למדם")
+st.markdown("<h1 style='text-align: right;'>🤖 מערכת אוטומציה למדם</h1>", unsafe_allow_html=True)
 
-if "logged_in" not in st.session_state: st.session_state.logged_in = False
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
     u = st.text_input("שם משתמש")
@@ -124,28 +129,54 @@ if not st.session_state.logged_in:
             st.rerun()
 else:
     file = st.file_uploader("העלה אקסל (A: תלמיד, B: סיסמה)", type="xlsx")
-    num_videos = st.slider("סרטונים לתלמיד:", 1, 10, 3)
-    target_time = st.time_input("שעת התחלה")
     
+    # שליטה בכמות הסרטונים
+    num_videos_to_solve = st.slider("כמות סרטונים לכל תלמיד:", min_value=1, max_value=10, value=3)
+    
+    days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+    selected_days = st.multiselect("בחר ימי פעילות:", days_list, default=["שני"])
+    target_time = st.time_input("בחר שעת תחילת עבודה")
+
     if file:
         df = pd.read_excel(file, header=None)
-        students = df.dropna(subset=[0, 1])
-        st.info(f"נטענו {len(students)} תלמידים.")
-        
+        students_data = df.dropna(subset=[0, 1])
+        total_students = len(students_data)
+        st.info(f"📋 נטענו {total_students} תלמידים.")
+
         log_box = st.empty()
-        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
         if st.button("🚀 הפעל עכשיו (בדיקה)"):
-            for idx, row in students.iterrows():
-                run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos)
-        
-        if st.button("⏰ הפעל תזמון"):
-            st.warning("המערכת ממתינה... (אל תרענן את הדף)")
+            completed = 0
+            for index, row in students_data.iterrows():
+                status_text.write(f"מעבד {str(row[0])} ({completed + 1}/{total_students})...")
+                if run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos_to_solve):
+                    completed += 1
+                progress_bar.progress(completed / total_students)
+            st.success("🏁 סיום הבדיקה!")
+
+        if st.button("⏰ הפעל תזמון אוטומטי"):
             israel_tz = pytz.timezone('Asia/Jerusalem')
+            # מיפוי ימים לעברית
+            day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
+            eng_selected_days = [day_map[d] for d in selected_days]
+            
+            st.warning(f"המערכת ממתינה לשעה {target_time.strftime('%H:%M')} בימי: {', '.join(selected_days)}")
+            
             while True:
-                now = datetime.now(israel_tz).strftime("%H:%M")
-                if now == target_time.strftime("%H:%M"):
-                    for idx, row in students.iterrows():
-                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos)
-                    st.success("הסבב היומי הושלם!")
-                    time.sleep(70)
+                now_israel = datetime.now(israel_tz)
+                current_day = now_israel.strftime("%A")
+                current_time = now_israel.strftime("%H:%M")
+                
+                # הבדיקה החדשה: האם היום הנוכחי נבחר והאם השעה הגיעה
+                if current_day in eng_selected_days and current_time == target_time.strftime("%H:%M"):
+                    log_box.success("השעה הגיעה! מתחיל הרצה שבועית...")
+                    completed = 0
+                    for index, row in students_data.iterrows():
+                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos_to_solve)
+                        completed += 1
+                        progress_bar.progress(completed / total_students)
+                    time.sleep(70) # למנוע הרצה כפולה באותה דקה
+                
                 time.sleep(30)
