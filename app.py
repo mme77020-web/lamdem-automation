@@ -11,37 +11,22 @@ import time
 from datetime import datetime
 import pytz
 
-# --- הגדרות קבועות ---
+# --- הגדרות ---
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
 def solve_lesson_video(driver, log_box):
-    """הלוגיקה המדויקת מהקוד המקורי שלך שעבד"""
     time.sleep(12) 
-    
     def try_play_and_skip(d):
         try:
-            play_selectors = [
-                "//button[contains(@class, 'vjs-big-play-button')]",
-                "//button[@aria-label='Play']",
-                "//mat-icon[text()='play_arrow']",
-                "//*[contains(@class, 'play')]"
-            ]
-            for selector in play_selectors:
-                btns = d.find_elements(By.XPATH, selector)
+            play_selectors = ["//button[contains(@class, 'vjs-big-play-button')]", "//button[@aria-label='Play']"]
+            for s in play_selectors:
+                btns = d.find_elements(By.XPATH, s)
                 if btns:
                     d.execute_script("arguments[0].click();", btns[0])
                     break
-            
             time.sleep(5)
-            d.execute_script("""
-                var v = document.querySelector('video');
-                if(v && v.duration) {
-                    v.muted = true;
-                    v.play();
-                    v.currentTime = v.duration - 3;
-                }
-            """)
+            d.execute_script("var v = document.querySelector('video'); if(v && v.duration) { v.muted = true; v.play(); v.currentTime = v.duration - 3; }")
             return True
         except: return False
 
@@ -59,10 +44,8 @@ def solve_lesson_video(driver, log_box):
         if complete_btn:
             driver.execute_script("arguments[0].click();", complete_btn[0])
             log_box.success("✅ בוצע סימון כהושלם")
-            time.sleep(3)
     except: pass
 
-# עדכון: הוספת הפרמטר num_videos לפונקציה
 def run_process(username, password, log_box, num_videos):
     options = Options()
     options.add_argument("--headless")
@@ -80,7 +63,6 @@ def run_process(username, password, log_box, num_videos):
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
-        log_box.info(f"👤 מחובר: {username}")
         time.sleep(10)
 
         enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
@@ -90,64 +72,48 @@ def run_process(username, password, log_box, num_videos):
         course_url = driver.current_url
         blacklist = []
 
-        # עדכון: שימוש בפרמטר num_videos במקום המספר הקבוע 3
         for i in range(num_videos): 
             driver.get(course_url)
             time.sleep(10)
-            
             items = driver.find_elements(By.TAG_NAME, "mat-list-item")
             target_lesson = None
             lesson_name = ""
 
             for it in items:
                 html = it.get_attribute("innerHTML")
-                txt = it.text.strip()
                 if "play_circle" in html and "check_circle" not in html:
-                    name_clean = txt.replace('play_circle', '').strip().split('\n')[0]
-                    if name_clean and name_clean not in blacklist:
-                        lesson_name = name_clean
+                    lesson_name = it.text.strip().split('\n')[0]
+                    if lesson_name not in blacklist:
                         target_lesson = it
                         break
 
-            if not target_lesson:
-                log_box.warning(f"🏁 אין שיעורים נוספים ל-{username}")
-                break
-
-            log_box.info(f"📺 [{i+1}/{num_videos}] מבצע: {lesson_name}")
+            if not target_lesson: break
             
-            try:
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_lesson)
-                time.sleep(2)
-                driver.execute_script("arguments[0].click();", target_lesson)
-                time.sleep(8)
-                
-                if driver.current_url == course_url:
-                    try:
-                        inner_text_element = target_lesson.find_element(By.XPATH, f".//*[contains(text(), '{lesson_name}')]")
-                        driver.execute_script("arguments[0].click();", inner_text_element)
-                        time.sleep(8)
-                    except: pass
-
-                if driver.current_url != course_url:
-                    solve_lesson_video(driver, log_box)
-                else:
-                    blacklist.append(lesson_name)
-            except:
+            log_box.info(f"📺 [{i+1}/{num_videos}] עובד על: {lesson_name}")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_lesson)
+            time.sleep(2)
+            driver.execute_script("arguments[0].click();", target_lesson)
+            time.sleep(8)
+            
+            if driver.current_url != course_url:
+                solve_lesson_video(driver, log_box)
+            else:
                 blacklist.append(lesson_name)
 
         driver.quit()
         return True
     except Exception as e:
-        if driver: driver.quit()
-        log_box.error(f"❌ שגיאה: {str(e)}")
+        if driver:
+            st.image(driver.get_screenshot_as_png(), caption="צילום מסך של השגיאה")
+            driver.quit()
+        log_box.error(f"❌ שגיאה עבור {username}: {str(e)}")
         return False
 
-# --- ממשק ---
+# --- ממשק משתמש ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.markdown("<h1 style='text-align: right;'>🤖 מערכת אוטומציה למדם</h1>", unsafe_allow_html=True)
+st.title("🤖 מערכת אוטומציה למדם")
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+if "logged_in" not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
     u = st.text_input("שם משתמש")
@@ -158,44 +124,28 @@ if not st.session_state.logged_in:
             st.rerun()
 else:
     file = st.file_uploader("העלה אקסל (A: תלמיד, B: סיסמה)", type="xlsx")
+    num_videos = st.slider("סרטונים לתלמיד:", 1, 10, 3)
+    target_time = st.time_input("שעת התחלה")
     
-    # הוספת כפתור בחירה לכמות סרטונים (שינוי בממשק)
-    num_videos_to_solve = st.slider("כמות סרטונים לכל תלמיד:", min_value=1, max_value=10, value=3)
-    
-    days_list = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
-    selected_days = st.multiselect("ימי פעילות:", days_list)
-    target_time = st.time_input("שעת תחילת עבודה")
-
     if file:
         df = pd.read_excel(file, header=None)
-        students_data = df.dropna(subset=[0, 1])
-        total_students = len(students_data)
-        st.info(f"נטענו {total_students} תלמידים.")
-
+        students = df.dropna(subset=[0, 1])
+        st.info(f"נטענו {len(students)} תלמידים.")
+        
         log_box = st.empty()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
+        
         if st.button("🚀 הפעל עכשיו (בדיקה)"):
-            completed = 0
-            for index, row in students_data.iterrows():
-                username = str(row[0]).strip()
-                password = str(row[1]).strip()
-                status_text.write(f"מעבד {username} ({completed + 1}/{total_students})...")
-                # העברת המשתנה החדש לפונקציה
-                if run_process(username, password, log_box, num_videos_to_solve):
-                    completed += 1
-                progress_bar.progress(completed / total_students)
-            st.success("🏁 הסבב הסתיים!")
-
+            for idx, row in students.iterrows():
+                run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos)
+        
         if st.button("⏰ הפעל תזמון"):
+            st.warning("המערכת ממתינה... (אל תרענן את הדף)")
             israel_tz = pytz.timezone('Asia/Jerusalem')
-            st.warning("המערכת פועלת ברקע וממתינה לזמן שנקבע...")
             while True:
-                now = datetime.now(israel_tz)
-                if now.strftime("%H:%M") == target_time.strftime("%H:%M"):
-                    for index, row in students_data.iterrows():
-                        # העברת המשתנה החדש לפונקציה בתוך התזמון
-                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos_to_solve)
+                now = datetime.now(israel_tz).strftime("%H:%M")
+                if now == target_time.strftime("%H:%M"):
+                    for idx, row in students.iterrows():
+                        run_process(str(row[0]).strip(), str(row[1]).strip(), log_box, num_videos)
+                    st.success("הסבב היומי הושלם!")
                     time.sleep(70)
                 time.sleep(30)
