@@ -10,34 +10,38 @@ from selenium.webdriver.support import expected_conditions as EC
 import time
 from datetime import datetime
 import pytz
-import threading
-import json
 import os
+import json
+import threading
 
-# --- קבצי שמירה בשרת ---
-CONFIG_FILE = "bot_settings.json"
-EXCEL_STORAGE = "students_data.xlsx"
+# --- הגדרות אחסון בשרת ---
+CONFIG_FILE = "bot_config.json"
+DATA_STORAGE = "stored_students.xlsx"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
-# פונקציות עזר לשמירת מצב
-def save_config(days, target_time, num_videos):
+# פונקציות לשמירת המצב (כדי שלא יימחק בסגירת חלונית)
+def save_settings(days, target_time, num_videos):
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"days": days, "time": target_time.strftime("%H:%M"), "num_videos": num_videos}, f)
+        json.dump({
+            "days": days,
+            "time": target_time.strftime("%H:%M"),
+            "num_videos": num_videos
+        }, f)
 
-def load_config():
+def load_settings():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
             return data["days"], datetime.strptime(data["time"], "%H:%M").time(), data["num_videos"]
-    return ["שני"], datetime.now().time(), 3
+    return [], datetime.now().time(), 3
 
-# --- לוגיקת הבוט (ללא שינוי מהמקור שעבד לך) ---
-def solve_lesson_video(driver):
+# --- הלוגיקה המקורית שלך (מיועדת לעבודה בענן) ---
+def solve_lesson_video(driver, log_box):
     time.sleep(12) 
     def try_play_and_skip(d):
         try:
-            play_selectors = ["//button[contains(@class, 'vjs-big-play-button')]", "//button[@aria-label='Play']"]
+            play_selectors = ["//button[contains(@class, 'vjs-big-play-button')]", "//button[@aria-label='Play']", "//mat-icon[text()='play_arrow']"]
             for s in play_selectors:
                 btns = d.find_elements(By.XPATH, s)
                 if btns: d.execute_script("arguments[0].click();", btns[0]); break
@@ -45,15 +49,22 @@ def solve_lesson_video(driver):
             d.execute_script("var v = document.querySelector('video'); if(v && v.duration) { v.muted = true; v.play(); v.currentTime = v.duration - 3; }")
             return True
         except: return False
+
+    if not try_play_and_skip(driver):
+        for frame in driver.find_elements(By.TAG_NAME, "iframe"):
+            try:
+                driver.switch_to.frame(frame)
+                try_play_and_skip(driver)
+                driver.switch_to.default_content()
+            except: driver.switch_to.default_content()
     
-    try_play_and_skip(driver)
     time.sleep(10)
     try:
         btn = driver.find_elements(By.XPATH, "//button[contains(., 'סימון כהושלם')]")
-        if btn: driver.execute_script("arguments[0].click();", btn[0])
+        if btn: driver.execute_script("arguments[0].click();", btn[0]); log_box.success("✅ סומן כהושלם")
     except: pass
 
-def run_bot_instance(username, password, num_videos):
+def run_bot_instance(username, password, num_videos, log_box):
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -63,51 +74,56 @@ def run_bot_instance(username, password, num_videos):
     try:
         service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=options)
+        wait = WebDriverWait(driver, 25)
+        
         driver.get(LOGIN_URL)
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
         time.sleep(10)
-        enter = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
+
+        enter = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
         driver.execute_script("arguments[0].click();", enter)
-        time.sleep(10)
-        url = driver.current_url
+        time.sleep(12)
+        
+        course_url = driver.current_url
         for i in range(num_videos):
-            driver.get(url); time.sleep(8)
+            driver.get(course_url); time.sleep(10)
             items = driver.find_elements(By.TAG_NAME, "mat-list-item")
             for it in items:
-                if "play_circle" in it.get_attribute("innerHTML") and "check_circle" not in it.get_attribute("innerHTML"):
+                html = it.get_attribute("innerHTML")
+                if "play_circle" in html and "check_circle" not in html:
+                    log_box.info(f"📺 תלמיד {username}: מבצע שיעור {i+1}")
                     driver.execute_script("arguments[0].click();", it)
                     time.sleep(8)
-                    if driver.current_url != url: solve_lesson_video(driver)
+                    if driver.current_url != course_url: solve_lesson_video(driver, log_box)
                     break
         driver.quit()
-    except:
+    except Exception as e:
         if driver: driver.quit()
+        log_box.error(f"❌ שגיאה ב-{username}: {str(e)}")
 
-# --- מנוע תזמון רקע ---
-def background_scheduler():
+# --- מנוע תזמון (רץ ברקע של השרת) ---
+def scheduler_loop():
     israel_tz = pytz.timezone('Asia/Jerusalem')
     day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
-    
     while True:
-        if os.path.exists(CONFIG_FILE) and os.path.exists(EXCEL_STORAGE):
-            days, t_time, n_vids = load_config()
+        if os.path.exists(CONFIG_FILE) and os.path.exists(DATA_STORAGE):
+            days, t_time, n_vids = load_settings()
             now = datetime.now(israel_tz)
             if now.strftime("%A") in [day_map[d] for d in days] and now.strftime("%H:%M") == t_time.strftime("%H:%M"):
-                df = pd.read_excel(EXCEL_STORAGE, header=None).dropna(subset=[0, 1])
+                df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
                 for _, row in df.iterrows():
-                    run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), n_vids)
+                    run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), n_vids, st.empty())
                 time.sleep(70)
         time.sleep(30)
 
-# הפעלת תהליך הרקע פעם אחת בלבד
-if "scheduler_started" not in st.session_state:
-    threading.Thread(target=background_scheduler, daemon=True).start()
-    st.session_state.scheduler_started = True
+if "bg_task" not in st.session_state:
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+    st.session_state.bg_task = True
 
-# --- ממשק משתמש ---
+# --- ממשק המערכת ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 מערכת אוטומציה למדם - עבודה ברקע")
+st.title("🤖 מערכת אוטומציה למדם (Persistent)")
 
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 
@@ -118,22 +134,22 @@ if not st.session_state.logged_in:
         if u in AUTHORIZED_USERS and AUTHORIZED_USERS[u] == p:
             st.session_state.logged_in = True; st.rerun()
 else:
-    # טעינת הגדרות קיימות (אם יש)
-    saved_days, saved_time, saved_vids = load_config()
+    s_days, s_time, s_vids = load_settings()
     
-    st.subheader("⚙️ הגדרות תזמון (נשמרות אוטומטית)")
-    sel_days = st.multiselect("ימי פעילות:", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=saved_days)
-    sel_time = st.time_input("שעת תחילת עבודה:", value=saved_time)
-    sel_vids = st.slider("סרטונים לתלמיד:", 1, 10, value=saved_vids)
+    col1, col2 = st.columns(2)
+    with col1:
+        sel_days = st.multiselect("ימי פעילות:", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=s_days)
+    with col2:
+        sel_time = st.time_input("שעת התחלה:", value=s_time)
     
-    uploaded_file = st.file_uploader("העלה/עדכן אקסל (A משתמש, B סיסמה)", type="xlsx")
-    
-    if st.button("💾 שמור הגדרות והפעל"):
-        save_config(sel_days, sel_time, sel_vids)
-        if uploaded_file:
-            with open(EXCEL_STORAGE, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-        st.success("✅ ההגדרות והקובץ נשמרו בשרת! המערכת תפעל ברקע גם אם תסגור את האתר.")
+    sel_vids = st.slider("סרטונים לתלמיד:", 1, 10, value=s_vids)
+    file = st.file_uploader("העלה אקסל (A: משתמש, B: סיסמה)", type="xlsx")
 
-    if os.path.exists(EXCEL_STORAGE):
-        st.info("📊 קיים קובץ נתונים שמור בשרת. ניתן להחליפו בכל עת.")
+    if st.button("💾 שמור והפעל תזמון"):
+        save_settings(sel_days, sel_time, sel_vids)
+        if file:
+            with open(DATA_STORAGE, "wb") as f: f.write(file.getbuffer())
+        st.success("✅ הנתונים נשמרו! המערכת תפעל ברקע גם אם תסגור את הכרטיסייה.")
+
+    if os.path.exists(DATA_STORAGE):
+        st.info("📊 קיימים נתונים שמורים בשרת. הבוט יפעל לפי התזמון האחרון ששמרת.")
