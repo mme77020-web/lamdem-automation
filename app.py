@@ -22,6 +22,25 @@ DATA_STORAGE = "stored_students.xlsx"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 
+# רשימת המשתמשים המורשים למערכת הניהול
+AUTHORIZED_USERS = {
+    "user_01": "lamdem8821",
+    "user_02": "smart_bot_99",
+    "user_03": "chabad_user_1",
+    "user_04": "vip_access_10",
+    "user_05": "helper_2024",
+    "user_06": "gold_member_5",
+    "user_07": "student_fix_1",
+    "user_08": "fast_pass_77",
+    "user_09": "learn_bot_44",
+    "user_10": "auto_finish_2",
+    "user_11": "admin_team_1",
+    "user_12": "master_user_9",
+    "user_13": "login_safe_0",
+    "user_14": "power_user_x",
+    "user_15": "final_step_25"
+}
+
 # --- מנהל לוגים ---
 def write_log(msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
@@ -32,7 +51,6 @@ def write_log(msg):
 
 # --- שמירה וטעינה ---
 def save_config_to_file():
-    # לוקח את הנתונים ישירות מהמסך (Session State)
     config = {
         "days": st.session_state.ui_days,
         "time": str(st.session_state.ui_time),
@@ -44,11 +62,8 @@ def save_config_to_file():
     st.toast("ההגדרות נשמרו בהצלחה!", icon="💾")
 
 def load_config_to_state():
-    # פונקציה זו רצה רק פעם אחת בטעינת האתר
     if "data_loaded" not in st.session_state:
         default_settings = {"days": [], "time": "15:00", "videos": 3}
-        
-        # מנסה לטעון מהקובץ אם קיים
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -56,20 +71,18 @@ def load_config_to_state():
                     default_settings.update(file_data)
             except: pass
         
-        # המרת מחרוזת זמן לאובייקט זמן
         try:
             t_obj = datetime.strptime(default_settings["time"], "%H:%M:%S").time()
         except:
             try: t_obj = datetime.strptime(default_settings["time"], "%H:%M").time()
             except: t_obj = dt_time(15, 0)
 
-        # שמירה לזיכרון של האתר
         st.session_state.ui_days = default_settings["days"]
         st.session_state.ui_time = t_obj
         st.session_state.ui_videos = default_settings["videos"]
         st.session_state.data_loaded = True
 
-# --- לוגיקת בוט (הקוד שעובד לך) ---
+# --- לוגיקת בוט ---
 def solve_lesson_video(driver):
     time.sleep(5)
     try:
@@ -181,7 +194,7 @@ def run_single_student(username, password, num_videos):
         write_log(f"❌ שגיאה: {e}")
         if driver: driver.quit()
 
-# --- המנעול העליון (תזמון יחיד) ---
+# --- מנעול עליון לתזמון ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -219,66 +232,87 @@ def start_global_scheduler():
 start_global_scheduler()
 
 # --- ממשק משתמש ---
-st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 אוטומציה למדם V4")
+st.set_page_config(page_title="מערכת אוטומציה למדם", layout="centered", page_icon="🤖")
 
-# טעינת נתונים ראשונית (רק פעם אחת)
-load_config_to_state()
+# בדיקת התחברות
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-# בדיקת קובץ אקסל
-if os.path.exists(DATA_STORAGE):
-    st.success(f"✅ קובץ תלמידים קיים ({datetime.fromtimestamp(os.path.getmtime(DATA_STORAGE)).strftime('%d/%m %H:%M')})")
+if not st.session_state.logged_in:
+    st.markdown("<h1 style='text-align: center;'>🔐 התחברות למערכת</h1>", unsafe_allow_html=True)
+    
+    col_l, col_c, col_r = st.columns([1,2,1])
+    with col_c:
+        username_input = st.text_input("שם משתמש")
+        password_input = st.text_input("סיסמה", type="password")
+        
+        if st.button("כניסה", use_container_width=True):
+            if username_input in AUTHORIZED_USERS and AUTHORIZED_USERS[username_input] == password_input:
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("שם משתמש או סיסמה שגויים")
+
 else:
-    st.warning("⚠️ נא להעלות קובץ תלמידים")
+    # --- תוכן המערכת למי שהתחבר ---
+    st.title("🤖 אוטומציה למדם V5")
+    
+    # כפתור התנתקות
+    if st.sidebar.button("יציאה"):
+        st.session_state.logged_in = False
+        st.rerun()
 
-# טופס ההגדרות - מקושר ישירות לזיכרון של האתר
-col1, col2 = st.columns(2)
-with col1:
-    st.multiselect("ימי פעילות", 
-                   ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], 
-                   key="ui_days") # מפתח ייחודי בזיכרון
-with col2:
-    st.time_input("שעת התחלה", step=60, key="ui_time") # מפתח ייחודי בזיכרון
-
-st.slider("כמות שיעורים לתלמיד", 1, 10, key="ui_videos")
-
-# העלאת קובץ
-uploaded_file = st.file_uploader("העלה אקסל (A=משתמש, B=סיסמה)", type="xlsx")
-if uploaded_file:
-    with open(DATA_STORAGE, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    st.success("הקובץ הועלה בהצלחה!")
-
-# כפתור שמירה
-if st.button("💾 שמור שינויים בתזמון"):
-    save_config_to_file()
-
-st.divider()
-
-# כפתור בדיקה ידנית
-if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
-if st.button("🚀 הפעל בדיקה עכשיו (ידני)"):
-    if os.path.exists(DATA_STORAGE) and not st.session_state.manual_lock:
-        st.session_state.manual_lock = True
-        def manual_run():
-            try:
-                df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
-                first = df.iloc[0]
-                run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
-            finally:
-                st.session_state.manual_lock = False
-        threading.Thread(target=manual_run).start()
-        st.info("הבדיקה רצה ברקע... בדוק ביומן")
+    load_config_to_state()
+    
+    if os.path.exists(DATA_STORAGE):
+        st.success(f"✅ קובץ תלמידים קיים ({datetime.fromtimestamp(os.path.getmtime(DATA_STORAGE)).strftime('%d/%m %H:%M')})")
     else:
-        st.error("הבוט עובד כרגע או שאין קובץ")
+        st.warning("⚠️ נא להעלות קובץ תלמידים")
 
-if st.button("🗑️ נקה יומן"):
-    open(LOG_FILE, "w").close()
-    st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.multiselect("ימי פעילות", 
+                       ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], 
+                       key="ui_days")
+    with col2:
+        st.time_input("שעת התחלה", step=60, key="ui_time")
 
-st.subheader("📝 יומן פעילות")
-log_content = "ממתין..."
-if os.path.exists(LOG_FILE):
-    with open(LOG_FILE, "r", encoding="utf-8") as f:
-        log_content = "".join(f.readlines()[::-1])
-st.text_area("לוג:", value=log_content, height=400)
+    st.slider("כמות שיעורים לתלמיד", 1, 10, key="ui_videos")
+
+    uploaded_file = st.file_uploader("העלה אקסל (A=משתמש, B=סיסמה)", type="xlsx")
+    if uploaded_file:
+        with open(DATA_STORAGE, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.success("הקובץ הועלה בהצלחה!")
+
+    if st.button("💾 שמור הגדרות"):
+        save_config_to_file()
+
+    st.divider()
+
+    if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
+    if st.button("🚀 הפעל בדיקה עכשיו (ידני)"):
+        if os.path.exists(DATA_STORAGE) and not st.session_state.manual_lock:
+            st.session_state.manual_lock = True
+            def manual_run():
+                try:
+                    df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
+                    first = df.iloc[0]
+                    run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
+                finally:
+                    st.session_state.manual_lock = False
+            threading.Thread(target=manual_run).start()
+            st.info("הבדיקה רצה ברקע... בדוק ביומן")
+        else:
+            st.error("הבוט עובד כרגע או שאין קובץ")
+
+    if st.button("🗑️ נקה יומן"):
+        open(LOG_FILE, "w").close()
+        st.rerun()
+
+    st.subheader("📝 יומן פעילות")
+    log_content = "ממתין..."
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            log_content = "".join(f.readlines()[::-1])
+    st.text_area("לוג:", value=log_content, height=400)
