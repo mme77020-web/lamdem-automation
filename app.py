@@ -5,8 +5,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager # רכיב חדש לתיקון גרסאות
 import time
 from datetime import datetime
 import pytz
@@ -14,176 +13,216 @@ import os
 import json
 import threading
 
-# --- הגדרות אחסון קבועות ---
+# --- הגדרות ---
 CONFIG_FILE = "bot_config.json"
 DATA_STORAGE = "stored_students.xlsx"
-LOG_FILE = "execution_log.txt"
+LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
-AUTHORIZED_USERS = {"user_01": "lamdem8821", "user_02": "smart_bot_99"}
 
-def add_to_log(message):
+# --- פונקציית לוגים (כותבת מיד לקובץ) ---
+def write_log(msg):
+    # הדפסה גם למסך וגם לקובץ
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{timestamp}] {msg}"
+    print(entry) # מציג בלוגים של השרת
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {message}\n")
+        f.write(entry + "\n")
 
-def save_settings(days, target_time, num_videos):
+# --- שמירה וטעינה של הגדרות ---
+def save_data(days, time_val, vids, uploaded_file=None):
+    # שמירת הגדרות
+    config = {"days": days, "time": str(time_val), "videos": vids}
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"days": days, "time": target_time.strftime("%H:%M"), "num_videos": num_videos}, f)
+        json.dump(config, f)
+    # שמירת אקסל
+    if uploaded_file:
+        with open(DATA_STORAGE, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+    write_log("✅ הגדרות ונתונים נשמרו בדיסק בהצלחה.")
 
-def load_settings():
+def load_data():
+    settings = {"days": [], "time": "15:00", "videos": 3}
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                data = json.load(f)
-                return data["days"], datetime.strptime(data["time"], "%H:%M").time(), data["num_videos"]
+                settings = json.load(f)
         except: pass
-    return [], datetime.now().time(), 3
+    return settings
 
-# --- לוגיקת הבוט המנצחת שלך ---
-def solve_lesson_video(driver):
-    time.sleep(12) 
-    def try_play_and_skip(d):
-        try:
-            play_selectors = ["//button[contains(@class, 'vjs-big-play-button')]", "//button[@aria-label='Play']", "//mat-icon[text()='play_arrow']"]
-            for s in play_selectors:
-                btns = d.find_elements(By.XPATH, s)
-                if btns: d.execute_script("arguments[0].click();", btns[0]); break
-            time.sleep(5)
-            d.execute_script("var v = document.querySelector('video'); if(v && v.duration) { v.muted = true; v.play(); v.currentTime = v.duration - 3; }")
-            return True
-        except: return False
-
-    if not try_play_and_skip(driver):
-        for frame in driver.find_elements(By.TAG_NAME, "iframe"):
-            try:
-                driver.switch_to.frame(frame)
-                try_play_and_skip(driver)
-                driver.switch_to.default_content()
-            except: driver.switch_to.default_content()
-    
-    time.sleep(10)
-    try:
-        btn = driver.find_elements(By.XPATH, "//button[contains(., 'סימון כהושלם')]")
-        if btn: 
-            driver.execute_script("arguments[0].click();", btn[0])
-            return True
-    except: pass
-    return False
-
-def run_bot_instance(username, password, num_videos, status_container=None):
+# --- הבוט עצמו ---
+def run_single_student(username, password, num_videos):
+    write_log(f"🚀 מתחיל תהליך עבור: {username}")
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.binary_location = "/usr/bin/chromium"
+    options.binary_location = "/usr/bin/chromium" # נתיב הכרום בשרת
+    
     driver = None
     try:
-        service = Service("/usr/bin/chromedriver")
+        # התקנה אוטומטית של הדרייבר המתאים
+        service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 25)
         
         driver.get(LOGIN_URL)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
-        driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
+        time.sleep(5)
+        
+        # התחברות
+        try:
+            driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='identifier']").send_keys(str(username))
+            driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
+        except Exception as e:
+            write_log(f"❌ שגיאה בהתחברות ל-{username}: {e}")
+            return
+
         time.sleep(10)
-
-        enter = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
-        driver.execute_script("arguments[0].click();", enter)
-        time.sleep(12)
         
-        course_url = driver.current_url
-        success_count = 0
+        # כניסה לקורס
+        try:
+            enter_btn = driver.find_element(By.XPATH, "//button[contains(., 'כניסה')]")
+            driver.execute_script("arguments[0].click();", enter_btn)
+        except:
+            write_log(f"⚠️ לא נמצא כפתור כניסה ל-{username}, אולי הסיסמה שגויה?")
+            return
+
+        time.sleep(10)
+        url = driver.current_url
+        completed = 0
+        
         for i in range(num_videos):
-            driver.get(course_url); time.sleep(10)
+            driver.get(url)
+            time.sleep(8)
+            
+            # מציאת שיעור לא גמור
             items = driver.find_elements(By.TAG_NAME, "mat-list-item")
-            for it in items:
-                html = it.get_attribute("innerHTML")
-                if "play_circle" in html and "check_circle" not in html:
-                    if status_container: status_container.info(f"📺 {username}: מבצע שיעור {i+1}")
-                    driver.execute_script("arguments[0].click();", it)
-                    time.sleep(8)
-                    if driver.current_url != course_url: 
-                        if solve_lesson_video(driver): success_count += 1
+            target = None
+            for item in items:
+                if "play_circle" in item.get_attribute("innerHTML") and "check_circle" not in item.get_attribute("innerHTML"):
+                    target = item
                     break
-        
-        add_to_log(f"תלמיד {username}: הושלמו {success_count} שיעורים.")
+            
+            if not target:
+                write_log(f"🏁 אין יותר שיעורים זמינים ל-{username}")
+                break
+                
+            # ביצוע השיעור
+            write_log(f"📺 {username}: צופה בשיעור {i+1}...")
+            driver.execute_script("arguments[0].click();", target)
+            time.sleep(8)
+            
+            # לוגיקת סיום וידאו
+            try:
+                # לחיצה על Play
+                driver.execute_script("var v = document.querySelector('video'); if(v){v.muted=true; v.play();}")
+                time.sleep(5)
+                # הרצה לסוף
+                driver.execute_script("var v = document.querySelector('video'); if(v && v.duration){v.currentTime = v.duration - 2;}")
+                time.sleep(5)
+                # סימון כהושלם
+                btn = driver.find_element(By.XPATH, "//button[contains(., 'סימון כהושלם')]")
+                driver.execute_script("arguments[0].click();", btn)
+                write_log(f"✅ {username}: שיעור {i+1} סומן בהצלחה!")
+                completed += 1
+            except Exception as e:
+                write_log(f"⚠️ בעיה בשיעור {i+1} ל-{username}: {e}")
+                
         driver.quit()
-        return True
+        write_log(f"✨ סיים טיפול ב-{username}. סה\"כ הושלמו: {completed}")
+        
     except Exception as e:
-        add_to_log(f"שגיאה בתלמיד {username}: {str(e)}")
+        write_log(f"❌ קריסה כללית בבוט עבור {username}: {e}")
         if driver: driver.quit()
-        return False
 
-# --- מנוע תזמון רקע ---
-def scheduler_loop():
-    israel_tz = pytz.timezone('Asia/Jerusalem')
+# --- מנוע תזמון ---
+def scheduler():
+    tz = pytz.timezone('Asia/Jerusalem')
     day_map = {"ראשון": "Sunday", "שני": "Monday", "שלישי": "Tuesday", "רביעי": "Wednesday", "חמישי": "Thursday", "שישי": "Friday", "שבת": "Saturday"}
+    
     while True:
         try:
-            if os.path.exists(CONFIG_FILE) and os.path.exists(DATA_STORAGE):
-                days, t_time, n_vids = load_settings()
-                now = datetime.now(israel_tz)
-                if now.strftime("%A") in [day_map[d] for d in days] and now.strftime("%H:%M") == t_time.strftime("%H:%M"):
-                    add_to_log("⏰ זמן תזמון הגיע - מתחיל הרצה אוטומטית...")
-                    df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
+            settings = load_data()
+            if os.path.exists(DATA_STORAGE) and settings["days"]:
+                now = datetime.now(tz)
+                current_day = now.strftime("%A")
+                current_time = now.strftime("%H:%M")
+                
+                # בדיקת זמן
+                days_eng = [day_map[d] for d in settings["days"]]
+                target_time = settings["time"] # כבר מגיע כמחרוזת בגלל ה-JSON
+
+                # תיקון פורמט זמן אם צריך
+                if len(target_time) > 5: target_time = target_time[:5]
+                
+                if current_day in days_eng and current_time == target_time:
+                    write_log("⏰ זמן תזמון הגיע! מתחיל הרצה...")
+                    df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
                     for _, row in df.iterrows():
-                        run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), n_vids)
+                        run_single_student(str(row[0]).strip(), str(row[1]).strip(), settings["videos"])
                     time.sleep(70)
         except Exception as e:
-            add_to_log(f"שגיאה במנוע התזמון: {str(e)}")
+            print(f"Scheduler Error: {e}")
         time.sleep(30)
 
-if "bg_task" not in st.session_state:
-    threading.Thread(target=scheduler_loop, daemon=True).start()
-    st.session_state.bg_task = True
+# הפעלת התזמון ברקע
+if "sched" not in st.session_state:
+    threading.Thread(target=scheduler, daemon=True).start()
+    st.session_state.sched = True
 
 # --- ממשק משתמש ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
 st.title("🤖 מערכת אוטומציה למדם")
 
-if "logged_in" not in st.session_state: st.session_state.logged_in = False
+# טעינת נתונים קיימים
+curr_conf = load_data()
 
-if not st.session_state.logged_in:
-    u = st.text_input("שם משתמש")
-    p = st.text_input("סיסמה", type="password")
-    if st.button("כניסה"):
-        if u in AUTHORIZED_USERS and AUTHORIZED_USERS[u] == p:
-            st.session_state.logged_in = True; st.rerun()
+# הצגת סטטוס קבצים
+if os.path.exists(DATA_STORAGE):
+    st.success("✅ קיים קובץ תלמידים שמור בשרת (לא יימחק בסגירה).")
 else:
-    s_days, s_time, s_vids = load_settings()
-    
-    st.subheader("⚙️ הגדרות")
-    sel_days = st.multiselect("ימי פעילות:", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=s_days)
-    sel_time = st.time_input("שעת התחלה:", value=s_time)
-    sel_vids = st.slider("סרטונים לתלמיד:", 1, 10, value=s_vids)
-    file = st.file_uploader("העלה אקסל מעודכן", type="xlsx")
+    st.warning("⚠️ לא נמצא קובץ תלמידים. נא להעלות ולשמור.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("💾 שמור הגדרות"):
-            save_settings(sel_days, sel_time, sel_vids)
-            if file:
-                with open(DATA_STORAGE, "wb") as f: f.write(file.getbuffer())
-            st.success("✅ נשמר!")
-    
-    with col2:
-        if st.button("🚀 הפעל עכשיו"):
-            if os.path.exists(DATA_STORAGE):
-                df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0, 1])
-                progress = st.progress(0)
-                status = st.empty()
-                for i, row in enumerate(df.iterrows()):
-                    row = row[1]
-                    status.info(f"מעבד תלמיד {i+1} מתוך {len(df)}...")
-                    run_bot_instance(str(row[0]).strip(), str(row[1]).strip(), sel_vids, status)
-                    progress.progress((i + 1) / len(df))
-                st.success("🏁 סבב ידני הסתיים!")
-            else:
-                st.error("לא נמצא קובץ אקסל שמור. העלה קובץ ולחץ על שמור.")
+# טופס הגדרות
+col1, col2 = st.columns(2)
+with col1:
+    days = st.multiselect("ימי פעילות", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=curr_conf["days"])
+with col2:
+    # המרה חזרה לזמן כדי להציג בתיבה
+    try: t_val = datetime.strptime(curr_conf["time"], "%H:%M").time()
+    except: t_val = datetime.now().time()
+    t_input = st.time_input("שעת התחלה", value=t_val)
 
-    st.divider()
-    st.subheader("📝 יומן פעילות אחרון")
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            logs = f.readlines()
-            st.text_area("הודעות מהבוט:", value="".join(logs[-10:]), height=200) # מראה 10 שורות אחרונות
+vids = st.slider("כמות שיעורים לתלמיד", 1, 10, value=curr_conf["videos"])
+file = st.file_uploader("עדכון קובץ אקסל", type="xlsx")
+
+if st.button("💾 שמור הגדרות וקובץ (חובה ללחוץ!)"):
+    save_data(days, t_input, vids, file)
+    st.rerun()
+
+st.divider()
+
+col_a, col_b = st.columns(2)
+with col_a:
+    if st.button("🚀 הפעל בדיקה מיידית (תלמיד ראשון בלבד)"):
+        if os.path.exists(DATA_STORAGE):
+            df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
+            first_student = df.iloc[0]
+            st.info(f"מריץ בדיקה על: {first_student[0]}...")
+            run_single_student(str(first_student[0]).strip(), str(first_student[1]).strip(), vids)
+            st.success("בדיקה הסתיימה - בדוק את היומן למטה")
+        else:
+            st.error("אין קובץ שמור להרצה.")
+
+with col_b:
+    if st.button("🗑️ נקה יומן"):
+        open(LOG_FILE, "w").close()
+        st.rerun()
+
+st.subheader("📝 יומן פעילות (מתעדכן בזמן אמת)")
+# קריאת הלוגים
+log_content = "אין עדיין פעילות..."
+if os.path.exists(LOG_FILE):
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        log_content = "".join(lines[::-1]) # הופך סדר - חדש למעלה
+
+st.text_area("לוגים:", value=log_content, height=300)
