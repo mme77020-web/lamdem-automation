@@ -10,7 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import pytz
 import os
 import json
@@ -31,38 +31,56 @@ def write_log(msg):
         f.write(entry + "\n")
 
 # --- שמירה וטעינה ---
-def save_data(days, time_val, vids, uploaded_file=None):
-    config = {"days": days, "time": str(time_val), "videos": vids}
-    with open(CONFIG_FILE, "w") as f: json.dump(config, f)
-    if uploaded_file:
-        with open(DATA_STORAGE, "wb") as f: f.write(uploaded_file.getbuffer())
-    st.session_state.curr_conf = config
-    write_log("✅ הגדרות נשמרו.")
+def save_config_to_file():
+    # לוקח את הנתונים ישירות מהמסך (Session State)
+    config = {
+        "days": st.session_state.ui_days,
+        "time": str(st.session_state.ui_time),
+        "videos": st.session_state.ui_videos
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+    write_log("✅ הגדרות חדשות נשמרו.")
+    st.toast("ההגדרות נשמרו בהצלחה!", icon="💾")
 
-def load_data_initial():
-    if "curr_conf" not in st.session_state:
-        settings = {"days": [], "time": "15:00", "videos": 3}
+def load_config_to_state():
+    # פונקציה זו רצה רק פעם אחת בטעינת האתר
+    if "data_loaded" not in st.session_state:
+        default_settings = {"days": [], "time": "15:00", "videos": 3}
+        
+        # מנסה לטעון מהקובץ אם קיים
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "r") as f: settings = json.load(f)
+                with open(CONFIG_FILE, "r") as f:
+                    file_data = json.load(f)
+                    default_settings.update(file_data)
             except: pass
-        st.session_state.curr_conf = settings
+        
+        # המרת מחרוזת זמן לאובייקט זמן
+        try:
+            t_obj = datetime.strptime(default_settings["time"], "%H:%M:%S").time()
+        except:
+            try: t_obj = datetime.strptime(default_settings["time"], "%H:%M").time()
+            except: t_obj = dt_time(15, 0)
 
-# --- לוגיקת בוט ---
+        # שמירה לזיכרון של האתר
+        st.session_state.ui_days = default_settings["days"]
+        st.session_state.ui_time = t_obj
+        st.session_state.ui_videos = default_settings["videos"]
+        st.session_state.data_loaded = True
+
+# --- לוגיקת בוט (הקוד שעובד לך) ---
 def solve_lesson_video(driver):
     time.sleep(5)
     try:
-        # ניסיון הפעלה דרך JS
         driver.execute_script("var v = document.querySelector('video'); if(v){ v.muted=true; v.play(); }")
         time.sleep(2)
-        # לחיצה על כפתורי ניגון אם יש
         play_btns = driver.find_elements(By.XPATH, "//button[contains(@class, 'vjs-big-play-button') or @aria-label='Play']")
         if play_btns: driver.execute_script("arguments[0].click();", play_btns[0])
     except: pass
 
     time.sleep(5)
     try:
-        # הקפצה לסוף
         driver.execute_script("var v = document.querySelector('video'); if(v && v.duration){ v.currentTime = v.duration - 1; }")
     except: pass
     
@@ -121,11 +139,8 @@ def run_single_student(username, password, num_videos):
             for item in items:
                 html = item.get_attribute("innerHTML")
                 if "play_circle" in html and "check_circle" not in html:
-                    # --- תיקון לזיהוי שם השיעור ---
                     full_text = item.text.strip()
-                    # מפצל את הטקסט לשורות ולוקח את השורה הראשונה שאיננה 'play_circle'
                     lines = [line.strip() for line in full_text.split('\n') if line.strip() and "play_circle" not in line]
-                    
                     clean_name = lines[0] if lines else "Lesson"
                     
                     if clean_name not in blacklist:
@@ -145,7 +160,6 @@ def run_single_student(username, password, num_videos):
                 driver.execute_script("arguments[0].click();", target)
                 time.sleep(8)
                 
-                # גיבוי לחיצה
                 if driver.current_url == course_url:
                     try:
                         inner = target.find_element(By.XPATH, f".//*[contains(text(), '{lesson_name}')]")
@@ -156,19 +170,18 @@ def run_single_student(username, password, num_videos):
                 if driver.current_url != course_url:
                     if not solve_lesson_video(driver): blacklist.append(lesson_name)
                 else:
-                    write_log("⚠️ כשל בכניסה (URL לא השתנה)")
+                    write_log("⚠️ כשל בכניסה")
                     blacklist.append(lesson_name)
             except Exception as e:
-                write_log(f"שגיאה בכניסה לשיעור: {e}")
+                write_log(f"שגיאה: {e}")
                 blacklist.append(lesson_name)
 
         driver.quit()
     except Exception as e:
-        write_log(f"❌ שגיאה קריטית: {e}")
+        write_log(f"❌ שגיאה: {e}")
         if driver: driver.quit()
 
-# --- המנעול העליון (Singleton) ---
-# הפונקציה הזו רצה פעם אחת בלבד בחיי השרת!
+# --- המנעול העליון (תזמון יחיד) ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -189,76 +202,81 @@ def start_global_scheduler():
                         target_time = settings["time"][:5]
                         
                         if current_day in days_eng and current_time == target_time:
-                            write_log("⏰ זמן תזמון הגיע! (הרצה יחידה)")
+                            write_log("⏰ זמן תזמון הגיע!")
                             df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
                             for _, row in df.iterrows():
                                 if len(row) >= 2:
                                     run_single_student(str(row[0]).strip(), str(row[1]).strip(), settings["videos"])
                             write_log("✅ סבב הסתיים.")
                             time.sleep(70) 
-            except Exception as e:
-                print(f"Scheduler Error: {e}")
+            except: pass
             time.sleep(30)
 
-    # הפעלת הת'רד
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
     return thread
 
-# הפעלה ראשונית של התזמון (מוגן ע"י cache_resource)
 start_global_scheduler()
 
-# --- ממשק ---
+# --- ממשק משתמש ---
 st.set_page_config(page_title="אוטומציית למדם", layout="centered")
-st.title("🤖 אוטומציה למדם V3")
+st.title("🤖 אוטומציה למדם V4")
 
-load_data_initial()
-curr_conf = st.session_state.curr_conf
+# טעינת נתונים ראשונית (רק פעם אחת)
+load_config_to_state()
 
-if os.path.exists(DATA_STORAGE): st.success("✅ קובץ נתונים תקין.")
-else: st.warning("⚠️ נא להעלות קובץ.")
+# בדיקת קובץ אקסל
+if os.path.exists(DATA_STORAGE):
+    st.success(f"✅ קובץ תלמידים קיים ({datetime.fromtimestamp(os.path.getmtime(DATA_STORAGE)).strftime('%d/%m %H:%M')})")
+else:
+    st.warning("⚠️ נא להעלות קובץ תלמידים")
 
+# טופס ההגדרות - מקושר ישירות לזיכרון של האתר
 col1, col2 = st.columns(2)
-with col1: days = st.multiselect("ימים", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=curr_conf["days"])
-with col2: 
-    try: t_val = datetime.strptime(curr_conf["time"], "%H:%M").time()
-    except: t_val = datetime.now().time()
-    t_input = st.time_input("שעה", value=t_val)
-vids = st.slider("כמות שיעורים", 1, 10, value=curr_conf["videos"])
-file = st.file_uploader("אקסל (A=משתמש, B=סיסמה)", type="xlsx")
+with col1:
+    st.multiselect("ימי פעילות", 
+                   ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], 
+                   key="ui_days") # מפתח ייחודי בזיכרון
+with col2:
+    st.time_input("שעת התחלה", step=60, key="ui_time") # מפתח ייחודי בזיכרון
 
-if st.button("💾 שמור הגדרות"):
-    save_data(days, t_input, vids, file)
-    st.success("נשמר!")
-    time.sleep(1)
-    st.rerun()
+st.slider("כמות שיעורים לתלמיד", 1, 10, key="ui_videos")
+
+# העלאת קובץ
+uploaded_file = st.file_uploader("העלה אקסל (A=משתמש, B=סיסמה)", type="xlsx")
+if uploaded_file:
+    with open(DATA_STORAGE, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    st.success("הקובץ הועלה בהצלחה!")
+
+# כפתור שמירה
+if st.button("💾 שמור שינויים בתזמון"):
+    save_config_to_file()
 
 st.divider()
 
-# מנעול מקומי לכפתור הידני
+# כפתור בדיקה ידנית
 if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
-
-if st.button("🚀 בדיקה מיידית (ידנית)"):
+if st.button("🚀 הפעל בדיקה עכשיו (ידני)"):
     if os.path.exists(DATA_STORAGE) and not st.session_state.manual_lock:
         st.session_state.manual_lock = True
         def manual_run():
             try:
                 df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
                 first = df.iloc[0]
-                run_single_student(str(first[0]).strip(), str(first[1]).strip(), vids)
+                run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
             finally:
                 st.session_state.manual_lock = False
-        
         threading.Thread(target=manual_run).start()
-        st.info("הבדיקה רצה ברקע...")
+        st.info("הבדיקה רצה ברקע... בדוק ביומן")
     else:
-        st.error("הבוט כבר עובד או שאין קובץ.")
+        st.error("הבוט עובד כרגע או שאין קובץ")
 
 if st.button("🗑️ נקה יומן"):
     open(LOG_FILE, "w").close()
     st.rerun()
 
-st.subheader("📝 יומן")
+st.subheader("📝 יומן פעילות")
 log_content = "ממתין..."
 if os.path.exists(LOG_FILE):
     with open(LOG_FILE, "r", encoding="utf-8") as f:
