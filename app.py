@@ -18,11 +18,10 @@ import threading
 
 # --- הגדרות ---
 CONFIG_FILE = "bot_config.json"
-DATA_STORAGE = "stored_students.xlsx"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 
-# רשימת המשתמשים המורשים למערכת הניהול
+# רשימת המשתמשים המורשים
 AUTHORIZED_USERS = {
     "user_01": "lamdem8821",
     "user_02": "smart_bot_99",
@@ -49,21 +48,41 @@ def write_log(msg):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(entry + "\n")
 
+# --- פונקציית עזר לטעינת גוגל שיטס ---
+def load_data_from_sheet(sheet_url):
+    try:
+        if not sheet_url: return None
+        # המרת קישור רגיל לקישור CSV
+        csv_url = sheet_url.replace('/edit?usp=sharing', '/export?format=csv')
+        csv_url = csv_url.replace('/edit', '/export?format=csv')
+        
+        # קריאה ישירה מהאינטרנט
+        df = pd.read_csv(csv_url, header=None)
+        # סינון שורות ריקות
+        df = df.dropna(subset=[0, 1])
+        return df
+    except Exception as e:
+        write_log(f"שגיאה בטעינת הקישור: {e}")
+        return None
+
 # --- שמירה וטעינה ---
 def save_config_to_file():
     config = {
         "days": st.session_state.ui_days,
         "time": str(st.session_state.ui_time),
-        "videos": st.session_state.ui_videos
+        "videos": st.session_state.ui_videos,
+        "sheet_url": st.session_state.ui_sheet_url # שמירת הקישור
     }
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
-    write_log("✅ הגדרות חדשות נשמרו.")
+    
+    st.session_state.curr_conf = config
+    write_log("✅ הגדרות וקישור נשמרו.")
     st.toast("ההגדרות נשמרו בהצלחה!", icon="💾")
 
 def load_config_to_state():
     if "data_loaded" not in st.session_state:
-        default_settings = {"days": [], "time": "15:00", "videos": 3}
+        default_settings = {"days": [], "time": "15:00", "videos": 3, "sheet_url": ""}
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -80,9 +99,10 @@ def load_config_to_state():
         st.session_state.ui_days = default_settings["days"]
         st.session_state.ui_time = t_obj
         st.session_state.ui_videos = default_settings["videos"]
+        st.session_state.ui_sheet_url = default_settings.get("sheet_url", "")
         st.session_state.data_loaded = True
 
-# --- לוגיקת בוט ---
+# --- לוגיקת בוט (אותו קוד בדיוק) ---
 def solve_lesson_video(driver):
     time.sleep(5)
     try:
@@ -194,7 +214,7 @@ def run_single_student(username, password, num_videos):
         write_log(f"❌ שגיאה: {e}")
         if driver: driver.quit()
 
-# --- מנעול עליון לתזמון ---
+# --- המנעול העליון לתזמון ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -203,10 +223,11 @@ def start_global_scheduler():
         
         while True:
             try:
-                if os.path.exists(CONFIG_FILE) and os.path.exists(DATA_STORAGE):
+                if os.path.exists(CONFIG_FILE):
                     with open(CONFIG_FILE, "r") as f: settings = json.load(f)
                     
-                    if settings["days"]:
+                    # בדיקה שיש ימים, שעה וקישור לשיטס
+                    if settings.get("days") and settings.get("sheet_url"):
                         now = datetime.now(tz)
                         current_day = now.strftime("%A")
                         current_time = now.strftime("%H:%M")
@@ -216,11 +237,15 @@ def start_global_scheduler():
                         
                         if current_day in days_eng and current_time == target_time:
                             write_log("⏰ זמן תזמון הגיע!")
-                            df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
-                            for _, row in df.iterrows():
-                                if len(row) >= 2:
-                                    run_single_student(str(row[0]).strip(), str(row[1]).strip(), settings["videos"])
-                            write_log("✅ סבב הסתיים.")
+                            # קריאה מהקישור שנשמר
+                            df = load_data_from_sheet(settings["sheet_url"])
+                            if df is not None:
+                                for _, row in df.iterrows():
+                                    if len(row) >= 2:
+                                        run_single_student(str(row[0]).strip(), str(row[1]).strip(), settings["videos"])
+                                write_log("✅ סבב הסתיים.")
+                            else:
+                                write_log("⚠️ שגיאה בקריאת הנתונים מהשיטס")
                             time.sleep(70) 
             except: pass
             time.sleep(30)
@@ -255,19 +280,20 @@ if not st.session_state.logged_in:
 
 else:
     # --- תוכן המערכת למי שהתחבר ---
-    st.title("🤖 אוטומציה למדם V5")
+    st.title("🤖 אוטומציה למדם V6 (שיטס)")
     
-    # כפתור התנתקות
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.rerun()
 
     load_config_to_state()
     
-    if os.path.exists(DATA_STORAGE):
-        st.success(f"✅ קובץ תלמידים קיים ({datetime.fromtimestamp(os.path.getmtime(DATA_STORAGE)).strftime('%d/%m %H:%M')})")
+    # הצגת סטטוס הקישור
+    current_url = st.session_state.ui_sheet_url
+    if current_url:
+        st.success(f"✅ מחובר לגוגל שיטס")
     else:
-        st.warning("⚠️ נא להעלות קובץ תלמידים")
+        st.warning("⚠️ נא להזין קישור לגוגל שיטס")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -279,11 +305,8 @@ else:
 
     st.slider("כמות שיעורים לתלמיד", 1, 10, key="ui_videos")
 
-    uploaded_file = st.file_uploader("העלה אקסל (A=משתמש, B=סיסמה)", type="xlsx")
-    if uploaded_file:
-        with open(DATA_STORAGE, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.success("הקובץ הועלה בהצלחה!")
+    # שדה טקסט לקישור במקום העלאת קובץ
+    st.text_input("הדבק כאן קישור ל-Google Sheet (חובה שיהיה פתוח לכולם)", key="ui_sheet_url")
 
     if st.button("💾 שמור הגדרות"):
         save_config_to_file()
@@ -291,20 +314,23 @@ else:
     st.divider()
 
     if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
-    if st.button("🚀 הפעל בדיקה עכשיו (ידני)"):
-        if os.path.exists(DATA_STORAGE) and not st.session_state.manual_lock:
+    if st.button("🚀 הפעל בדיקה עכשיו (מהקישור)"):
+        if st.session_state.ui_sheet_url and not st.session_state.manual_lock:
             st.session_state.manual_lock = True
             def manual_run():
                 try:
-                    df = pd.read_excel(DATA_STORAGE, header=None).dropna(subset=[0,1])
-                    first = df.iloc[0]
-                    run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
+                    df = load_data_from_sheet(st.session_state.ui_sheet_url)
+                    if df is not None:
+                        first = df.iloc[0]
+                        run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
+                    else:
+                        write_log("שגיאה: לא הצלחתי לקרוא מהקישור. וודא שהוא 'Anyone with the link'")
                 finally:
                     st.session_state.manual_lock = False
             threading.Thread(target=manual_run).start()
             st.info("הבדיקה רצה ברקע... בדוק ביומן")
         else:
-            st.error("הבוט עובד כרגע או שאין קובץ")
+            st.error("חסר קישור או שהבוט עובד")
 
     if st.button("🗑️ נקה יומן"):
         open(LOG_FILE, "w").close()
