@@ -15,12 +15,17 @@ import pytz
 import os
 import json
 import threading
-import re # ספריה לזיהוי תבניות טקסט
+import re 
+from concurrent.futures import ThreadPoolExecutor
 
 # --- הגדרות ---
 CONFIG_FILE = "bot_config.json"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
+MAX_WORKERS = 3  # <--- מספר הבוטים שרצים במקביל
+
+# מנעול לכתיבה ללוג כדי למנוע התנגשויות בין תהליכים
+log_lock = threading.Lock()
 
 AUTHORIZED_USERS = {
     "user_01": "lamdem8821",
@@ -44,24 +49,22 @@ def write_log(msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] {msg}"
     print(entry)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(entry + "\n")
+    # שימוש בנעילה כדי שבוטים מקבילים לא יכתבו אחד על השני
+    with log_lock:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
 
-# --- התיקון הגדול: מחלץ ID ובודק הרשאות ---
+# --- חילוץ ID ובודק הרשאות ---
 def load_data_from_sheet(sheet_url):
     try:
         if not sheet_url: return None
         
-        # שלב 1: חילוץ המזהה (ID) מתוך הקישור בעזרת ביטוי רגולרי
-        # זה עובד גם אם הקישור נראה מוזר או מסתיים ב-gid אחר
         match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
         
         if match:
             sheet_id = match.group(1)
-            # בניית קישור הורדה נקי
             csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
             
-            # קריאה
             df = pd.read_csv(csv_url, header=None)
             df = df.dropna(subset=[0, 1])
             return df
@@ -156,7 +159,7 @@ def run_single_student(username, password, num_videos):
             enter_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'כניסה')]")))
             driver.execute_script("arguments[0].click();", enter_btn)
         except:
-            write_log("⚠️ לא נמצא כפתור כניסה")
+            write_log(f"⚠️ {username}: לא נמצא כפתור כניסה")
             driver.quit(); return
 
         time.sleep(12)
@@ -183,10 +186,10 @@ def run_single_student(username, password, num_videos):
                         break
             
             if not target:
-                write_log(f"🏁 אין יותר שיעורים ל-{username}")
+                write_log(f"🏁 {username}: אין יותר שיעורים לביצוע")
                 break
             
-            write_log(f"📺 [{i+1}/{num_videos}] עובד על: {lesson_name}")
+            write_log(f"📺 {username} [{i+1}/{num_videos}] עובד על: {lesson_name}")
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target)
                 time.sleep(1)
@@ -203,16 +206,32 @@ def run_single_student(username, password, num_videos):
                 if driver.current_url != course_url:
                     if not solve_lesson_video(driver): blacklist.append(lesson_name)
                 else:
-                    write_log("⚠️ כשל בכניסה")
+                    write_log(f"⚠️ {username}: כשל בכניסה לשיעור")
                     blacklist.append(lesson_name)
             except Exception as e:
-                write_log(f"שגיאה: {e}")
+                write_log(f"שגיאה אצל {username}: {e}")
                 blacklist.append(lesson_name)
 
         driver.quit()
     except Exception as e:
-        write_log(f"❌ שגיאה: {e}")
+        write_log(f"❌ שגיאה כללית אצל {username}: {e}")
         if driver: driver.quit()
+
+# פונקציה המריצה את כל הרשימה במקביל
+def run_batch_students(df, num_videos):
+    tasks = []
+    # שימוש ב-ThreadPoolExecutor להרצת 3 במקביל
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        for _, row in df.iterrows():
+            if len(row) >= 2:
+                u = str(row[0]).strip()
+                p = str(row[1]).strip()
+                # שליחת המשימה לביצוע ברקע
+                tasks.append(executor.submit(run_single_student, u, p, num_videos))
+        
+        # (אופציונלי) המתנה שכולם יסיימו
+        for task in tasks:
+            task.result()
 
 @st.cache_resource
 def start_global_scheduler():
@@ -233,13 +252,11 @@ def start_global_scheduler():
                         target_time = settings["time"][:5]
                         
                         if current_day in days_eng and current_time == target_time:
-                            write_log("⏰ זמן תזמון הגיע!")
+                            write_log("⏰ זמן תזמון הגיע! מתחיל הרצה במקביל...")
                             df = load_data_from_sheet(settings["sheet_url"])
                             if df is not None:
-                                for _, row in df.iterrows():
-                                    if len(row) >= 2:
-                                        run_single_student(str(row[0]).strip(), str(row[1]).strip(), settings["videos"])
-                                write_log("✅ סבב הסתיים.")
+                                run_batch_students(df, settings["videos"])
+                                write_log("✅ סבב מתוזמן הסתיים.")
                             time.sleep(70) 
             except: pass
             time.sleep(30)
@@ -266,7 +283,7 @@ if not st.session_state.logged_in:
                 st.rerun()
             else: st.error("פרטים שגויים")
 else:
-    st.title("🤖 אוטומציה למדם V7 (חילוץ חכם)")
+    st.title(f"🤖 אוטומציה למדם V8 (טורבו x{MAX_WORKERS})")
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.rerun()
@@ -293,26 +310,32 @@ else:
     st.divider()
 
     if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
-    if st.button("🚀 הפעל בדיקה ידנית"):
+    
+    # כפתור הפעלה ידנית - מריץ כעת על כל הרשימה במקביל!
+    if st.button("🚀 הפעל בדיקה ידנית (על כל הרשימה)"):
         if st.session_state.ui_sheet_url and not st.session_state.manual_lock:
             st.session_state.manual_lock = True
             def manual_run():
                 try:
+                    write_log("--- התחלת הרצה ידנית (מקבילית) ---")
                     df = load_data_from_sheet(st.session_state.ui_sheet_url)
                     if df is not None:
-                        first = df.iloc[0]
-                        run_single_student(str(first[0]).strip(), str(first[1]).strip(), st.session_state.ui_videos)
+                        # שימוש בפונקציה החדשה שמריצה 3 במקביל
+                        run_batch_students(df, st.session_state.ui_videos)
                     else: write_log("שגיאה בטעינת השיטס. בדוק שהקישור ציבורי.")
-                finally: st.session_state.manual_lock = False
+                finally: 
+                    st.session_state.manual_lock = False
+                    write_log("--- סיום הרצה ידנית ---")
+
             threading.Thread(target=manual_run).start()
-            st.info("בדיקה רצה ברקע...")
-        else: st.error("חסר קישור")
+            st.info(f"תהליך החל! 3 בוטים ירוצו במקביל על הרשימה.")
+        else: st.error("חסר קישור או שתהליך כבר רץ")
 
     if st.button("🗑️ נקה יומן"):
         open(LOG_FILE, "w").close()
         st.rerun()
 
-    st.subheader("📝 יומן")
+    st.subheader("📝 יומן פעילות")
     log_c = "ריק"
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r", encoding="utf-8") as f: log_c = "".join(f.readlines()[::-1])
