@@ -1,1 +1,22 @@
+name: Wake Up Streamlit App
 
+on:
+  schedule:
+    # ירוץ כל 3 שעות
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping_site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Run Ping Script
+        run: python headless_bot.py
