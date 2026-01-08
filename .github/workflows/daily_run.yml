@@ -1,15 +1,14 @@
-name: Run Lamdem Bot
+name: Wake Up Streamlit App
 
 on:
   schedule:
-    # ירוץ כל 3 שעות עגולות (00:00, 03:00, 06:00 וכו') - סה"כ 8 פעמים ביום
+    # ירוץ כל 3 שעות
     - cron: '0 */3 * * *'
   workflow_dispatch:
 
 jobs:
-  build:
+  ping_site:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -19,10 +18,5 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install selenium webdriver-manager pandas openpyxl
-
-      - name: Run Bot Script
+      - name: Run Ping Script
         run: python headless_bot.py
