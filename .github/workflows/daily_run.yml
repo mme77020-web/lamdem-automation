@@ -2,8 +2,8 @@ name: Wake Up Streamlit App
 
 on:
   schedule:
-    # מריץ את הבוט כל 3 שעות
-    - cron: '0 */3 * * *'
+    # --- שינוי קריטי: ירוץ כל 45 דקות במקום כל 3 שעות ---
+    - cron: '*/45 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,9 +17,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      # שים לב: אנחנו בכוונה מדלגים על שלב התקנת הספריות (pip install)
-      # כי הבוט הזה צריך רק את מה שמגיע עם פייתון בסיסי
 
       - name: Run Ping Script
         run: python headless_bot.py
