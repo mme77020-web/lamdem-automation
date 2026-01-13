@@ -3,7 +3,7 @@ name: Wake Up Streamlit App
 on:
   schedule:
     # --- שינוי קריטי: ירוץ כל 45 דקות במקום כל 3 שעות ---
-    - cron: '*/45 * * * *'
+- cron: '*/12 * * * *'
   workflow_dispatch:
 
 jobs:
