@@ -2,11 +2,11 @@ name: Wake Up Streamlit App
 
 on:
   schedule:
-    - cron: '*/12 * * * *'
-  workflow_dispatch:
+    - cron: '*/20 * * * *'      # רץ כל 20 דקות
+  workflow_dispatch:            # <--- זו השורה שמחזירה את הכפתור!
 
 jobs:
-  ping_site:
+  selenium_bot:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -17,5 +17,9 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Run Ping Script
+      - name: Install Dependencies
+        run: |
+          pip install selenium webdriver-manager
+
+      - name: Run Smart Bot
         run: python headless_bot.py
