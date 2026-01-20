@@ -2,8 +2,8 @@ name: Wake Up Streamlit App
 
 on:
   schedule:
-    - cron: '*/20 * * * *'      # רץ כל 20 דקות
-  workflow_dispatch:            # <--- זו השורה שמחזירה את הכפתור!
+    - cron: '*/10 * * * *'  # שינוי קריטי: כל 10 דקות
+  workflow_dispatch:
 
 jobs:
   selenium_bot:
