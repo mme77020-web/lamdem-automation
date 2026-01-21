@@ -15,14 +15,16 @@ import pytz
 import os
 import json
 import threading
-import re 
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 # --- הגדרות ---
 CONFIG_FILE = "bot_config.json"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
-MAX_WORKERS = 3  # <--- מספר הבוטים שרצים במקביל
+
+# --- השינוי הקריטי כאן: הורדנו ל-1 כדי למנוע קריסת זיכרון ---
+MAX_WORKERS = 1 
 
 # מנעול לכתיבה ללוג כדי למנוע התנגשויות בין תהליכים
 log_lock = threading.Lock()
@@ -220,7 +222,8 @@ def run_single_student(username, password, num_videos):
 # פונקציה המריצה את כל הרשימה במקביל
 def run_batch_students(df, num_videos):
     tasks = []
-    # שימוש ב-ThreadPoolExecutor להרצת 3 במקביל
+    # שימוש ב-ThreadPoolExecutor
+    # בגלל שהגדרנו MAX_WORKERS=1 זה ירוץ אחד-אחד ולא יקריס את הזיכרון
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         for _, row in df.iterrows():
             if len(row) >= 2:
@@ -252,7 +255,7 @@ def start_global_scheduler():
                         target_time = settings["time"][:5]
                         
                         if current_day in days_eng and current_time == target_time:
-                            write_log("⏰ זמן תזמון הגיע! מתחיל הרצה במקביל...")
+                            write_log("⏰ זמן תזמון הגיע! מתחיל הרצה...")
                             df = load_data_from_sheet(settings["sheet_url"])
                             if df is not None:
                                 run_batch_students(df, settings["videos"])
@@ -283,7 +286,7 @@ if not st.session_state.logged_in:
                 st.rerun()
             else: st.error("פרטים שגויים")
 else:
-    st.title(f"🤖 אוטומציה למדם V8 (טורבו x{MAX_WORKERS})")
+    st.title(f"🤖 אוטומציה למדם V8 (Lite x{MAX_WORKERS})")
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.rerun()
@@ -311,16 +314,16 @@ else:
 
     if "manual_lock" not in st.session_state: st.session_state.manual_lock = False
     
-    # כפתור הפעלה ידנית - מריץ כעת על כל הרשימה במקביל!
+    # כפתור הפעלה ידנית
     if st.button("🚀 הפעל בדיקה ידנית (על כל הרשימה)"):
         if st.session_state.ui_sheet_url and not st.session_state.manual_lock:
             st.session_state.manual_lock = True
             def manual_run():
                 try:
-                    write_log("--- התחלת הרצה ידנית (מקבילית) ---")
+                    write_log("--- התחלת הרצה ידנית ---")
                     df = load_data_from_sheet(st.session_state.ui_sheet_url)
                     if df is not None:
-                        # שימוש בפונקציה החדשה שמריצה 3 במקביל
+                        # שימוש בפונקציה החדשה
                         run_batch_students(df, st.session_state.ui_videos)
                     else: write_log("שגיאה בטעינת השיטס. בדוק שהקישור ציבורי.")
                 finally: 
@@ -328,7 +331,7 @@ else:
                     write_log("--- סיום הרצה ידנית ---")
 
             threading.Thread(target=manual_run).start()
-            st.info(f"תהליך החל! 3 בוטים ירוצו במקביל על הרשימה.")
+            st.info(f"תהליך החל! בוטים ירוצו בטור על הרשימה.")
         else: st.error("חסר קישור או שתהליך כבר רץ")
 
     if st.button("🗑️ נקה יומן"):
