@@ -1,14 +1,5 @@
 import streamlit as st
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 import time
 from datetime import datetime, time as dt_time
 import pytz
@@ -23,10 +14,9 @@ CONFIG_FILE = "bot_config.json"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 
-# --- השינוי הקריטי כאן: הורדנו ל-1 כדי למנוע קריסת זיכרון ---
-MAX_WORKERS = 1 
+# חזרנו ל-3 בוטים במקביל (טורבו)
+MAX_WORKERS = 3 
 
-# מנעול לכתיבה ללוג כדי למנוע התנגשויות בין תהליכים
 log_lock = threading.Lock()
 
 AUTHORIZED_USERS = {
@@ -51,31 +41,25 @@ def write_log(msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] {msg}"
     print(entry)
-    # שימוש בנעילה כדי שבוטים מקבילים לא יכתבו אחד על השני
     with log_lock:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
 
-# --- חילוץ ID ובודק הרשאות ---
 def load_data_from_sheet(sheet_url):
     try:
         if not sheet_url: return None
-        
         match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
-        
         if match:
             sheet_id = match.group(1)
             csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-            
             df = pd.read_csv(csv_url, header=None)
             df = df.dropna(subset=[0, 1])
             return df
         else:
-            write_log("שגיאה: הקישור לא נראה כמו קישור תקין של גוגל שיטס")
+            write_log("שגיאה: הקישור לא תקין")
             return None
-
     except Exception as e:
-        write_log(f"שגיאה בקריאת השיטס ({e}). וודא שהקובץ מוגדר כ-Public")
+        write_log(f"שגיאה בקריאת השיטס: {e}")
         return None
 
 def save_config_to_file():
@@ -111,8 +95,8 @@ def load_config_to_state():
         st.session_state.ui_sheet_url = default_settings.get("sheet_url", "")
         st.session_state.data_loaded = True
 
-# --- לוגיקת בוט ---
-def solve_lesson_video(driver):
+# --- פונקציית עזר לטיפול בוידאו ---
+def solve_lesson_video(driver, By):
     time.sleep(5)
     try:
         driver.execute_script("var v = document.querySelector('video'); if(v){ v.muted=true; v.play(); }")
@@ -134,8 +118,22 @@ def solve_lesson_video(driver):
     except: pass
     return False
 
+# --- הפונקציה הראשית שמריצה את הבוט ---
 def run_single_student(username, password, num_videos):
+    # >>> טעינה עצלה: חוסך זיכרון ומאפשר להריץ 3 במקביל <<<
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    from webdriver_manager.core.os_manager import ChromeType
+    # >>> סוף טעינה עצלה <<<
+
     write_log(f"🚀 מתחיל תהליך עבור: {username}")
+    
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -143,7 +141,6 @@ def run_single_student(username, password, num_videos):
     options.add_argument("--mute-audio")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    options.binary_location = "/usr/bin/chromium"
     
     driver = None
     try:
@@ -206,7 +203,7 @@ def run_single_student(username, password, num_videos):
                     except: pass
                 
                 if driver.current_url != course_url:
-                    if not solve_lesson_video(driver): blacklist.append(lesson_name)
+                    if not solve_lesson_video(driver, By): blacklist.append(lesson_name)
                 else:
                     write_log(f"⚠️ {username}: כשל בכניסה לשיעור")
                     blacklist.append(lesson_name)
@@ -219,20 +216,15 @@ def run_single_student(username, password, num_videos):
         write_log(f"❌ שגיאה כללית אצל {username}: {e}")
         if driver: driver.quit()
 
-# פונקציה המריצה את כל הרשימה במקביל
 def run_batch_students(df, num_videos):
     tasks = []
-    # שימוש ב-ThreadPoolExecutor
-    # בגלל שהגדרנו MAX_WORKERS=1 זה ירוץ אחד-אחד ולא יקריס את הזיכרון
+    # מריץ 3 במקביל!
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         for _, row in df.iterrows():
             if len(row) >= 2:
                 u = str(row[0]).strip()
                 p = str(row[1]).strip()
-                # שליחת המשימה לביצוע ברקע
                 tasks.append(executor.submit(run_single_student, u, p, num_videos))
-        
-        # (אופציונלי) המתנה שכולם יסיימו
         for task in tasks:
             task.result()
 
@@ -286,7 +278,7 @@ if not st.session_state.logged_in:
                 st.rerun()
             else: st.error("פרטים שגויים")
 else:
-    st.title(f"🤖 אוטומציה למדם V8 (Lite x{MAX_WORKERS})")
+    st.title(f"🤖 אוטומציה למדם V8 (טורבו x{MAX_WORKERS})")
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.rerun()
@@ -323,7 +315,6 @@ else:
                     write_log("--- התחלת הרצה ידנית ---")
                     df = load_data_from_sheet(st.session_state.ui_sheet_url)
                     if df is not None:
-                        # שימוש בפונקציה החדשה
                         run_batch_students(df, st.session_state.ui_videos)
                     else: write_log("שגיאה בטעינת השיטס. בדוק שהקישור ציבורי.")
                 finally: 
