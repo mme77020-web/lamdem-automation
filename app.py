@@ -10,11 +10,11 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 # --- הגדרות ---
-CONFIG_FILE = "bot_config.json"
+CONFIG_FILE = "bot_config.json"  # קובץ הזיכרון של האתר
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 
-# חזרנו ל-3 בוטים במקביל (טורבו)
+# החזרנו ל-3 בוטים במקביל (טורבו)
 MAX_WORKERS = 3 
 
 log_lock = threading.Lock()
@@ -37,6 +37,8 @@ AUTHORIZED_USERS = {
     "user_15": "final_step_25"
 }
 
+# --- פונקציות עזר לזיכרון ולוגים ---
+
 def write_log(msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] {msg}"
@@ -44,6 +46,29 @@ def write_log(msg):
     with log_lock:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
+
+# פונקציה לשמירת ההגדרות לקובץ
+def save_config(sheet_url, days, selected_time, videos):
+    config_data = {
+        "sheet_url": sheet_url,
+        "days": days,
+        "time": str(selected_time),
+        "videos": videos
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config_data, f)
+    write_log("💾 הגדרות נשמרו בהצלחה!")
+    st.toast("ההגדרות נשמרו! האתר יזכור אותן בפעם הבאה.", icon="✅")
+
+# פונקציה לטעינת ההגדרות מהקובץ
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
 
 def load_data_from_sheet(sheet_url):
     try:
@@ -62,40 +87,8 @@ def load_data_from_sheet(sheet_url):
         write_log(f"שגיאה בקריאת השיטס: {e}")
         return None
 
-def save_config_to_file():
-    config = {
-        "days": st.session_state.ui_days,
-        "time": str(st.session_state.ui_time),
-        "videos": st.session_state.ui_videos,
-        "sheet_url": st.session_state.ui_sheet_url
-    }
-    with open(CONFIG_FILE, "w") as f: json.dump(config, f)
-    st.session_state.curr_conf = config
-    write_log("✅ הגדרות נשמרו.")
-    st.toast("נשמר!", icon="💾")
+# --- לוגיקת הבוט ---
 
-def load_config_to_state():
-    if "data_loaded" not in st.session_state:
-        default_settings = {"days": [], "time": "15:00", "videos": 3, "sheet_url": ""}
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r") as f:
-                    file_data = json.load(f)
-                    default_settings.update(file_data)
-            except: pass
-        
-        try: t_obj = datetime.strptime(default_settings["time"], "%H:%M:%S").time()
-        except: 
-            try: t_obj = datetime.strptime(default_settings["time"], "%H:%M").time()
-            except: t_obj = dt_time(15, 0)
-
-        st.session_state.ui_days = default_settings["days"]
-        st.session_state.ui_time = t_obj
-        st.session_state.ui_videos = default_settings["videos"]
-        st.session_state.ui_sheet_url = default_settings.get("sheet_url", "")
-        st.session_state.data_loaded = True
-
-# --- פונקציית עזר לטיפול בוידאו ---
 def solve_lesson_video(driver, By):
     time.sleep(5)
     try:
@@ -118,9 +111,8 @@ def solve_lesson_video(driver, By):
     except: pass
     return False
 
-# --- הפונקציה הראשית שמריצה את הבוט ---
 def run_single_student(username, password, num_videos):
-    # >>> טעינה עצלה: חוסך זיכרון ומאפשר להריץ 3 במקביל <<<
+    # טעינה עצלה - קריטי לביצועים
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.chrome.options import Options
@@ -130,7 +122,6 @@ def run_single_student(username, password, num_videos):
     from selenium.webdriver.support import expected_conditions as EC
     from webdriver_manager.chrome import ChromeDriverManager
     from webdriver_manager.core.os_manager import ChromeType
-    # >>> סוף טעינה עצלה <<<
 
     write_log(f"🚀 מתחיל תהליך עבור: {username}")
     
@@ -218,7 +209,7 @@ def run_single_student(username, password, num_videos):
 
 def run_batch_students(df, num_videos):
     tasks = []
-    # מריץ 3 במקביל!
+    # מריץ 3 במקביל
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         for _, row in df.iterrows():
             if len(row) >= 2:
@@ -228,6 +219,7 @@ def run_batch_students(df, num_videos):
         for task in tasks:
             task.result()
 
+# --- המתזמן האוטומטי ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -236,8 +228,11 @@ def start_global_scheduler():
         
         while True:
             try:
+                # טעינת הגדרות בזמן אמת מהקובץ
                 if os.path.exists(CONFIG_FILE):
-                    with open(CONFIG_FILE, "r") as f: settings = json.load(f)
+                    with open(CONFIG_FILE, "r") as f: 
+                        settings = json.load(f)
+                    
                     if settings.get("days") and settings.get("sheet_url"):
                         now = datetime.now(tz)
                         current_day = now.strftime("%A")
@@ -246,15 +241,19 @@ def start_global_scheduler():
                         days_eng = [day_map[d] for d in settings["days"] if d in day_map]
                         target_time = settings["time"][:5]
                         
+                        # בדיקה האם הגיע הזמן לרוץ
                         if current_day in days_eng and current_time == target_time:
-                            write_log("⏰ זמן תזמון הגיע! מתחיל הרצה...")
+                            write_log(f"⏰ זמן תזמון ({current_time}) הגיע! מתחיל הרצה...")
                             df = load_data_from_sheet(settings["sheet_url"])
                             if df is not None:
                                 run_batch_students(df, settings["videos"])
                                 write_log("✅ סבב מתוזמן הסתיים.")
-                            time.sleep(70) 
-            except: pass
-            time.sleep(30)
+                            time.sleep(70) # לחכות דקה וקצת שלא ירוץ פעמיים באותה דקה
+            except Exception as e:
+                print(f"Scheduler Error: {e}")
+            
+            time.sleep(30) # בדיקה כל חצי דקה
+
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
     return thread
@@ -278,29 +277,43 @@ if not st.session_state.logged_in:
                 st.rerun()
             else: st.error("פרטים שגויים")
 else:
-    st.title(f"🤖 אוטומציה למדם V8 (טורבו x{MAX_WORKERS})")
+    st.title(f"🤖 אוטומציה למדם V9 (טורבו x{MAX_WORKERS})")
+    
+    # טעינת הגדרות שמורות (אם יש)
+    saved_config = load_config()
+    
+    # שליפת נתונים או ברירת מחדל
+    default_days = saved_config.get("days", [])
+    default_time_str = saved_config.get("time", "15:00")
+    try:
+        default_time = datetime.strptime(default_time_str[:5], "%H:%M").time()
+    except:
+        default_time = dt_time(15, 0)
+    
+    default_videos = saved_config.get("videos", 3)
+    default_sheet = saved_config.get("sheet_url", "")
+
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.rerun()
-
-    load_config_to_state()
     
-    if st.session_state.ui_sheet_url:
-        st.success("✅ מחובר לגוגל שיטס")
+    if default_sheet:
+        st.success(f"✅ מחובר לשיטס (נטען מהזיכרון)")
     else:
         st.warning("⚠️ נא להזין קישור לגוגל שיטס")
 
     col1, col2 = st.columns(2)
     with col1:
-        st.multiselect("ימי פעילות", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], key="ui_days")
+        selected_days = st.multiselect("ימי פעילות", ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"], default=default_days)
     with col2:
-        st.time_input("שעת התחלה", step=60, key="ui_time")
+        selected_time = st.time_input("שעת התחלה", value=default_time)
 
-    st.slider("כמות שיעורים", 1, 10, key="ui_videos")
-    st.text_input("הדבק כאן קישור לשיטס (Public):", key="ui_sheet_url")
+    num_videos = st.slider("כמות שיעורים", 1, 10, value=default_videos)
+    sheet_url_input = st.text_input("הדבק כאן קישור לשיטס (Public):", value=default_sheet)
 
-    if st.button("💾 שמור הגדרות"):
-        save_config_to_file()
+    # כפתור שמירה
+    if st.button("💾 שמור הגדרות לזיכרון האתר"):
+        save_config(sheet_url_input, selected_days, selected_time, num_videos)
 
     st.divider()
 
@@ -308,21 +321,21 @@ else:
     
     # כפתור הפעלה ידנית
     if st.button("🚀 הפעל בדיקה ידנית (על כל הרשימה)"):
-        if st.session_state.ui_sheet_url and not st.session_state.manual_lock:
+        if sheet_url_input and not st.session_state.manual_lock:
             st.session_state.manual_lock = True
             def manual_run():
                 try:
                     write_log("--- התחלת הרצה ידנית ---")
-                    df = load_data_from_sheet(st.session_state.ui_sheet_url)
+                    df = load_data_from_sheet(sheet_url_input)
                     if df is not None:
-                        run_batch_students(df, st.session_state.ui_videos)
+                        run_batch_students(df, num_videos)
                     else: write_log("שגיאה בטעינת השיטס. בדוק שהקישור ציבורי.")
                 finally: 
                     st.session_state.manual_lock = False
                     write_log("--- סיום הרצה ידנית ---")
 
             threading.Thread(target=manual_run).start()
-            st.info(f"תהליך החל! בוטים ירוצו בטור על הרשימה.")
+            st.info(f"תהליך החל! בוטים ירוצו במקביל.")
         else: st.error("חסר קישור או שתהליך כבר רץ")
 
     if st.button("🗑️ נקה יומן"):
