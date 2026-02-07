@@ -2,7 +2,7 @@ name: Wake Up Streamlit App
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'  # שינוי קריטי: כל 5 דקות
   workflow_dispatch:
 
 jobs:
