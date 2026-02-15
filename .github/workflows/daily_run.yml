@@ -2,7 +2,7 @@ name: Wake Up Streamlit App
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # שינוי קריטי: כל 5 דקות
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -23,3 +23,11 @@ jobs:
 
       - name: Run Monitor
         run: python headless_bot.py
+
+      # --- החלק החדש: העלאת צילומי המסך כדי שתוכל לראות מה קרה ---
+      - name: Upload Debug Screenshots
+        if: always() # ירוץ גם אם הבוט נכשל
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-screenshots
+          path: "*.png"
