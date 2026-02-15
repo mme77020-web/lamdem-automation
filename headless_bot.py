@@ -5,18 +5,18 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 import random
+import os
 
 # הכתובת שלך
 APP_URL = "https://lamdem-automation-bofurwgar4bmduns9g81fw.streamlit.app/"
 
-def run_stay_alive_bot():
-    print(f"🔄 Starting STAY-ALIVE Bot for: {APP_URL}")
+def run_diagnostic_bot():
+    print(f"🔄 Starting DIAGNOSTIC Bot for: {APP_URL}")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # התחזות למשתמש אמיתי
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
     chrome_options.add_argument("--window-size=1920,1080")
 
@@ -25,37 +25,51 @@ def run_stay_alive_bot():
     
     try:
         driver.get(APP_URL)
-        print("🌍 Entered site.")
+        print("🌍 Entered site. Waiting 15s for full load...")
+        time.sleep(15)
         
-        # לולאה שנמשכת כ-50 שניות כדי להחזיק את האתר ער
-        # זה מבטיח שהסשן לא יתנתק מיד
-        start_time = time.time()
-        while time.time() - start_time < 50:
-            
-            # 1. בדיקה אם האתר ישן (בכל איטרציה!)
-            try:
-                wake_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Yes, get this app back up')]")
-                if wake_btns:
-                    print("💤 Zzzz detected! Waking up...")
-                    wake_btns[0].click()
-                    time.sleep(5)
-                    driver.refresh()
-            except: pass
+        # צילום מסך 1: מצב כניסה
+        driver.save_screenshot("1_entry_state.png")
 
-            # 2. פעילות גלילה אקראית (כדי שהשרת יראה פעילות)
-            scroll_y = random.randint(0, 500)
+        # 1. ניסיון אגרסיבי להעיר את האתר
+        try:
+            # חיפוש כל סוגי הכפתורים האפשריים
+            wake_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Yes, get this app back up')]")
+            
+            if wake_btns:
+                print("💤 Sleep button found! Attempting JS Click...")
+                btn = wake_btns[0]
+                # שימוש ב-JavaScript כדי ללחוץ (הרבה יותר אמין מסלניום רגיל)
+                driver.execute_script("arguments[0].click();", btn)
+                print("✅ Click command sent via JS.")
+                
+                time.sleep(10)
+                driver.save_screenshot("2_after_click.png") # צילום אחרי לחיצה
+                
+                print("🔄 Refreshing page to confirm wakeup...")
+                driver.refresh()
+                time.sleep(15)
+            else:
+                print("⚡ No wake-up button found (Site likely active).")
+        except Exception as e:
+            print(f"⚠️ Wakeup attempt error: {e}")
+
+        # 2. וידוא פעילות (Keep Alive Loop)
+        # נשארים 45 שניות כדי לוודא שחיבור ה-WebSocket מתייצב
+        print("⏳ Starting keep-alive activity cycle...")
+        for i in range(3):
+            scroll_y = random.randint(100, 700)
             driver.execute_script(f"window.scrollTo(0, {scroll_y});")
-            
-            # המתנה קצרה בין בדיקות
-            time.sleep(10)
-            print(f"⏳ Still on site... ({int(time.time() - start_time)}s)")
-
-        print("✅ Session active for 50s. Done.")
+            time.sleep(15)
+        
+        # צילום מסך סופי לפני יציאה
+        driver.save_screenshot("3_final_state.png")
+        print("✅ Cycle finished successfully.")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Critical Error: {e}")
     finally:
         driver.quit()
 
 if __name__ == "__main__":
-    run_stay_alive_bot()
+    run_diagnostic_bot()
