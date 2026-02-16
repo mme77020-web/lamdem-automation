@@ -10,7 +10,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 # --- הגדרות מערכת ---
-CONFIG_FILE = "bot_config.json"
 LOG_FILE = "bot_activity.log"
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 MAX_WORKERS = 3 
@@ -44,33 +43,41 @@ def write_log(msg):
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
 
-# --- ניהול קונפיגורציה (שמירה וטעינה) ---
-def get_config():
-    if os.path.exists(CONFIG_FILE):
+# --- ניהול קונפיגורציה (שמירה וטעינה אישית לכל משתמש) ---
+def get_config_filename(username):
+    # יוצר שם קובץ ייחודי למשתמש, למשל: user_01_config.json
+    return f"{username}_config.json"
+
+def get_config(username):
+    filename = get_config_filename(username)
+    if os.path.exists(filename):
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(filename, "r") as f:
                 return json.load(f)
         except: pass
     return {}
 
-def save_config_to_disk(sheet_url, days, selected_time, videos):
+def save_config_to_disk(username, sheet_url, days, selected_time, videos):
+    filename = get_config_filename(username)
     config_data = {
+        "username": username,
         "sheet_url": sheet_url,
         "days": days,
         "time": str(selected_time),
         "videos": videos,
         "is_locked": True # סימון שההגדרות נעולות
     }
-    with open(CONFIG_FILE, "w") as f:
+    with open(filename, "w") as f:
         json.dump(config_data, f)
     return config_data
 
-def unlock_config():
+def unlock_config(username):
     # קריאת ההגדרות הקיימות
-    conf = get_config()
+    conf = get_config(username)
     if conf:
         conf["is_locked"] = False # ביטול נעילה
-        with open(CONFIG_FILE, "w") as f:
+        filename = get_config_filename(username)
+        with open(filename, "w") as f:
             json.dump(conf, f)
 
 # --- פונקציות ליבה (בוט) ---
@@ -111,7 +118,7 @@ def solve_lesson_video(driver, By):
     except: pass
     return False
 
-def run_single_student(username, password, num_videos):
+def run_single_student(username, password, num_videos, owner_username):
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.chrome.options import Options
@@ -122,7 +129,7 @@ def run_single_student(username, password, num_videos):
     from webdriver_manager.chrome import ChromeDriverManager
     from webdriver_manager.core.os_manager import ChromeType
 
-    write_log(f"🚀 מתחיל תהליך עבור: {username}")
+    write_log(f"🚀 [{owner_username}] מתחיל תהליך עבור תלמיד: {username}")
     
     options = Options()
     options.add_argument("--headless")
@@ -141,7 +148,7 @@ def run_single_student(username, password, num_videos):
         driver.get(LOGIN_URL)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='identifier']"))).send_keys(str(username))
         driver.find_element(By.ID, "pwd").send_keys(str(password) + Keys.RETURN)
-        write_log(f"👤 מחובר: {username}")
+        # write_log(f"👤 מחובר: {username}")
         time.sleep(10)
         
         try:
@@ -206,18 +213,18 @@ def run_single_student(username, password, num_videos):
         write_log(f"❌ שגיאה כללית אצל {username}: {e}")
         if driver: driver.quit()
 
-def run_batch_students(df, num_videos):
+def run_batch_students(df, num_videos, owner_username):
     tasks = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         for _, row in df.iterrows():
             if len(row) >= 2:
                 u = str(row[0]).strip()
                 p = str(row[1]).strip()
-                tasks.append(executor.submit(run_single_student, u, p, num_videos))
+                tasks.append(executor.submit(run_single_student, u, p, num_videos, owner_username))
         for task in tasks:
             task.result()
 
-# --- מתזמן ---
+# --- מתזמן חכם (רץ על כל המשתמשים) ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -226,34 +233,40 @@ def start_global_scheduler():
         
         while True:
             try:
-                # טעינת קונפיגורציה מהקובץ
-                conf = get_config()
-                
-                # רצים רק אם יש קובץ והוא במצב "נעול" (מוכן לעבודה)
-                if conf.get("is_locked") and conf.get("sheet_url"):
-                    now = datetime.now(tz)
-                    current_day_en = now.strftime("%A")
-                    current_time = now.strftime("%H:%M")
+                # לולאה על כל המשתמשים במערכת כדי לבדוק למי יש הגדרות
+                for user_key in AUTHORIZED_USERS.keys():
                     
-                    active_days_en = []
-                    raw_days = conf.get("days", [])
-                    for d in raw_days:
-                        if d in day_map_he_to_en: active_days_en.append(day_map_he_to_en[d])
-                        else: active_days_en.append(d)
+                    # טעינת קונפיגורציה ספציפית למשתמש הזה
+                    conf = get_config(user_key)
                     
-                    target_time = str(conf.get("time", "15:00"))[:5]
-                    
-                    if current_day_en in active_days_en and current_time == target_time:
-                        write_log(f"⏰ זמן תזמון ({current_time}) הגיע! מתחיל הרצה...")
-                        df = load_data_from_sheet(conf["sheet_url"])
-                        if df is not None:
-                            run_batch_students(df, conf.get("videos", 3))
-                            write_log("✅ סבב מתוזמן הסתיים.")
-                        time.sleep(70) 
+                    # בודקים אם יש לו קובץ הגדרות, ואם הוא נעול ומוכן
+                    if conf.get("is_locked") and conf.get("sheet_url"):
+                        now = datetime.now(tz)
+                        current_day_en = now.strftime("%A")
+                        current_time = now.strftime("%H:%M")
+                        
+                        active_days_en = []
+                        raw_days = conf.get("days", [])
+                        for d in raw_days:
+                            if d in day_map_he_to_en: active_days_en.append(day_map_he_to_en[d])
+                            else: active_days_en.append(d)
+                        
+                        target_time = str(conf.get("time", "15:00"))[:5]
+                        
+                        if current_day_en in active_days_en and current_time == target_time:
+                            write_log(f"⏰ זמן תזמון הגיע עבור {user_key}! מתחיל הרצה...")
+                            df = load_data_from_sheet(conf["sheet_url"])
+                            if df is not None:
+                                run_batch_students(df, conf.get("videos", 3), user_key)
+                                write_log(f"✅ סבב מתוזמן עבור {user_key} הסתיים.")
+                            # המתנה קטנה כדי לא להריץ פעמיים, אבל לא גדולה מדי כדי לא לחסום אחרים
+                            time.sleep(2) 
+
             except Exception as e:
                 print(f"Scheduler Error: {e}")
             
-            time.sleep(30) 
+            # בדיקה כל דקה
+            time.sleep(60) 
 
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
@@ -280,22 +293,24 @@ if not st.session_state.logged_in:
                 st.rerun()
             else: st.error("פרטים שגויים")
 else:
-    st.title(f"🤖 אוטומציה ({st.session_state.username})")
+    # כאן אנחנו יודעים מי המשתמש!
+    current_user = st.session_state.username
+    st.title(f"🤖 אוטומציה ({current_user})")
     
-    # טעינת הגדרות שמורות
-    saved_config = get_config()
+    # טעינת הגדרות אישיות למשתמש הנוכחי
+    saved_config = get_config(current_user)
     is_locked = saved_config.get("is_locked", False)
     
     # --- מצב 1: המערכת נעולה ומוכנה לעבודה ---
     if is_locked:
-        st.success("✅ ההגדרות נעולות והמערכת רצה ברקע")
+        st.success("✅ ההגדרות שלך נעולות והמערכת רצה ברקע")
         
         st.info(f"📄 שיטס פעיל: {saved_config.get('sheet_url')}")
         st.info(f"🕒 זמן הפעלה: {saved_config.get('time')} | ימים: {', '.join(saved_config.get('days', []))}")
         st.info(f"📺 כמות שיעורים: {saved_config.get('videos')}")
 
         if st.button("✏️ שחרר נעילה לעריכה"):
-            unlock_config()
+            unlock_config(current_user)
             st.rerun()
             
         st.divider()
@@ -305,21 +320,21 @@ else:
                 st.session_state.manual_lock = True
                 def manual_run_locked():
                     try:
-                        write_log(f"--- התחלת הרצה ידנית נעולה ---")
+                        write_log(f"--- התחלת הרצה ידנית נעולה ({current_user}) ---")
                         df = load_data_from_sheet(saved_config['sheet_url'])
                         if df is not None:
-                            run_batch_students(df, saved_config['videos'])
+                            run_batch_students(df, saved_config['videos'], current_user)
                     finally:
                         st.session_state.manual_lock = False
-                        write_log("--- סיום ---")
+                        write_log(f"--- סיום הרצה ({current_user}) ---")
                 threading.Thread(target=manual_run_locked).start()
                 st.toast("הבוט יצא לדרך!", icon="🚀")
 
     # --- מצב 2: מצב עריכה (התיבות פתוחות) ---
     else:
-        st.warning("⚠️ המערכת במצב עריכה - יש לשמור ולנעול כדי שהבוט האוטומטי יפעל")
+        st.warning(f"⚠️ עריכת הגדרות עבור {current_user}")
         
-        # ברירות מחדל
+        # ברירות מחדל (מהקובץ האישי או כללי)
         default_days = saved_config.get("days", [])
         default_time_str = str(saved_config.get("time", "15:00"))
         try: default_time = datetime.strptime(default_time_str[:5], "%H:%M").time()
@@ -336,9 +351,10 @@ else:
         num_videos = st.slider("כמות שיעורים", 1, 10, value=default_videos)
         sheet_url_input = st.text_input("קישור לשיטס (Public):", value=default_sheet)
 
-        if st.button("🔒 שמור ונעל הגדרות (חובה!)", type="primary"):
+        if st.button("🔒 שמור ונעל הגדרות עבורי", type="primary"):
             if sheet_url_input and "http" in sheet_url_input:
-                save_config_to_disk(sheet_url_input, selected_days, selected_time, num_videos)
+                # שומר לקובץ הספציפי של המשתמש
+                save_config_to_disk(current_user, sheet_url_input, selected_days, selected_time, num_videos)
                 st.rerun()
             else:
                 st.error("חובה להזין קישור תקין לשיטס")
@@ -346,9 +362,10 @@ else:
     # --- יציאה וניקוי ---
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
+        st.session_state.username = None
         st.rerun()
 
-    st.subheader("📝 לוג פעילות")
+    st.subheader("📝 לוג פעילות (כללי)")
     if st.button("🗑️ נקה"):
         open(LOG_FILE, "w").close()
         st.rerun()
