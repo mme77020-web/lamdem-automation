@@ -15,6 +15,10 @@ LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 MAX_WORKERS_PER_ACCOUNT = 2  # כמות תלמידים במקביל לכל חשבון
 GLOBAL_MAX_BROWSERS = 4      # הגבלה כללית על כמות דפדפנים פתוחים בשרת כדי למנוע קריסה
 
+# תיקייה קבועה לשמירת ההגדרות והלוגים בשרת לינוקס
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # מנעולים וניהול ריצה במקביל
 file_lock = threading.Lock()
 browser_semaphore = threading.Semaphore(GLOBAL_MAX_BROWSERS)
@@ -39,9 +43,9 @@ AUTHORIZED_USERS = {
     "user_15": "final_step_25"
 }
 
-# --- ניהול לוגים (נפרד לכל משתמש) ---
+# --- ניהול לוגים (נפרד לכל משתמש בתוך תיקיית data) ---
 def get_log_filename(username):
-    return f"log_{username}.txt"
+    return os.path.join(DATA_DIR, f"log_{username}.txt")
 
 def write_log(owner_username, msg):
     timestamp = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
@@ -52,9 +56,9 @@ def write_log(owner_username, msg):
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
 
-# --- ניהול קונפיגורציה (שמירה וטעינה אישית לכל משתמש) ---
+# --- ניהול קונפיגורציה (שמירה וטעינה אישית לכל משתמש בתוך תיקיית data) ---
 def get_config_filename(username):
-    return f"{username}_config.json"
+    return os.path.join(DATA_DIR, f"{username}_config.json")
 
 def get_config(username):
     filename = get_config_filename(username)
@@ -93,7 +97,6 @@ def unlock_config(username):
 
 # --- פונקציות ליבה (בוט) ---
 def load_data_from_sheets(sheet_urls_text, owner_username):
-    """תומך בקישור אחד או בכמה קישורי שיטס (כל קישור בשורה נפרדת)"""
     urls = [u.strip() for u in str(sheet_urls_text).splitlines() if "http" in u]
     all_dfs = []
     
@@ -143,7 +146,6 @@ def solve_lesson_video(driver, By, owner_username, student_user):
 
 def get_chrome_service():
     from selenium.webdriver.chrome.service import Service
-    # בדיקה אם מותקן דרייבר מובנה בלינוקס (מונע התנגשויות הורדה)
     sys_driver = shutil.which("chromedriver") or "/usr/bin/chromedriver"
     if os.path.exists(sys_driver):
         return Service(sys_driver)
@@ -159,7 +161,6 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
 
-    # המתנה בתור הכללי אם יש יותר מדי דפדפנים פתוחים בשרת
     with browser_semaphore:
         write_log(owner_username, f"🚀 מתחיל תהליך עבור תלמיד: {student_user}")
         
@@ -281,7 +282,7 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
     finally:
         active_users_running.discard(owner_username)
 
-# --- מתזמן חכם (מריץ חשבונות במקביל בלי לחסום אחד את השני) ---
+# --- מתזמן חכם ---
 @st.cache_resource
 def start_global_scheduler():
     def scheduler_loop():
@@ -305,11 +306,9 @@ def start_global_scheduler():
                         active_days_en = [day_map_he_to_en.get(d, d) for d in raw_days]
                         target_time = str(conf.get("time", "15:00"))[:5]
                         
-                        # בדיקה אם הגיע הזמן וגם שלא הרצנו כבר באותה דקה בדיוק
                         if current_day_en in active_days_en and current_time == target_time:
                             if last_scheduled_run.get(user_key) != today_key:
                                 last_scheduled_run[user_key] = today_key
-                                # פתיחת תהליך נפרד לכל חשבון כדי שחשבונות אחרים לא יחכו לו!
                                 threading.Thread(
                                     target=execute_account_job,
                                     args=(user_key, conf["sheet_url"], conf.get("videos", 3), "מתוזמנת"),
@@ -318,7 +317,7 @@ def start_global_scheduler():
             except Exception as e:
                 print(f"Scheduler Error: {e}")
             
-            time.sleep(20)  # בדיקה כל 20 שניות כדי לא לפספס דקה
+            time.sleep(20)
 
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
@@ -358,7 +357,6 @@ else:
     if is_running_now:
         st.warning("⚡ הבוט של החשבון שלך רץ כרגע ברקע! לחץ על 'רענן לוג' למטה כדי לראות התקדמות.")
 
-    # --- מצב 1: המערכת נעולה ומוכנה לעבודה ---
     if is_locked:
         st.success("✅ ההגדרות שלך נעולות והמערכת מתוזמנת ברקע")
         
@@ -383,7 +381,6 @@ else:
             time.sleep(1)
             st.rerun()
 
-    # --- מצב 2: מצב עריכה ---
     else:
         st.warning(f"⚠️ עריכת הגדרות עבור {current_user}")
         
@@ -420,7 +417,6 @@ else:
             else:
                 st.error("חובה להזין לפחות קישור תקין אחד לשיטס")
 
-    # --- יציאה וניהול לוג אישי ---
     if st.sidebar.button("יציאה"):
         st.session_state.logged_in = False
         st.session_state.username = None
