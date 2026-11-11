@@ -5,6 +5,7 @@ from datetime import datetime, time as dt_time
 import pytz
 import os
 import shutil
+import tempfile
 import json
 import threading
 import re
@@ -13,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- הגדרות מערכת ---
 LOGIN_URL = "https://chabad.lamdem.co.il/auth/login"
 MAX_WORKERS_PER_ACCOUNT = 2  # כמות תלמידים במקביל לכל חשבון
-GLOBAL_MAX_BROWSERS = 4      # הגבלה כללית על כמות דפדפנים פתוחים בשרת כדי למנוע קריסה
+GLOBAL_MAX_BROWSERS = 3      # הגבלה כללית על כמות דפדפנים פתוחים בשרת למניעת עומס
 
 # תיקייה קבועה לשמירת ההגדרות והלוגים בשרת לינוקס
 DATA_DIR = "data"
@@ -164,11 +165,18 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
     with browser_semaphore:
         write_log(owner_username, f"🚀 מתחיל תהליך עבור תלמיד: {student_user}")
         
+        # יצירת תיקייה זמנית ייחודית לתלמיד שנמחקת בסיום כדי למנוע קריסת כרום
+        user_data_dir = tempfile.mkdtemp(prefix=f"chrome_{student_user}_")
+        
         options = Options()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--renderer-process-limit=2")
+        options.add_argument(f"--user-data-dir={user_data_dir}")
         options.add_argument("--mute-audio")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -255,6 +263,9 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
                     driver.quit()
                 except Exception:
                     pass
+            # ניקוי התיקייה הזמנית של התלמיד
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+            time.sleep(2)
 
 def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="מתוזמנת"):
     if owner_username in active_users_running:
