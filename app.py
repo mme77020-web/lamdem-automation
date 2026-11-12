@@ -72,7 +72,7 @@ def get_config(username):
             pass
     return {}
 
-def save_config_to_disk(username, sheet_urls_text, days, selected_time, videos):
+def save_config_to_disk(username, sheet_urls_text, days, selected_time, videos, split_by_users=False, batch_size=50, current_offset=0):
     filename = get_config_filename(username)
     config_data = {
         "username": username,
@@ -80,12 +80,24 @@ def save_config_to_disk(username, sheet_urls_text, days, selected_time, videos):
         "days": days,
         "time": str(selected_time),
         "videos": videos,
+        "split_by_users": split_by_users,
+        "batch_size": int(batch_size),
+        "current_offset": int(current_offset),
         "is_locked": True
     }
     with file_lock:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
     return config_data
+
+def update_user_offset(username, new_offset):
+    conf = get_config(username)
+    if conf:
+        conf["current_offset"] = int(new_offset)
+        filename = get_config_filename(username)
+        with file_lock:
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(conf, f, ensure_ascii=False, indent=2)
 
 def unlock_config(username):
     conf = get_config(username)
@@ -165,7 +177,6 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
     with browser_semaphore:
         write_log(owner_username, f"🚀 מתחיל תהליך עבור תלמיד: {student_user}")
         
-        # יצירת תיקייה זמנית ייחודית לתלמיד שנמחקת בסיום כדי למנוע קריסת כרום
         user_data_dir = tempfile.mkdtemp(prefix=f"chrome_{student_user}_")
         
         options = Options()
@@ -263,7 +274,6 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
                     driver.quit()
                 except Exception:
                     pass
-            # ניקוי התיקייה הזמנית של התלמיד
             shutil.rmtree(user_data_dir, ignore_errors=True)
             time.sleep(2)
 
@@ -277,14 +287,55 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
         write_log(owner_username, f"--- התחלת הרצה {run_type} ---")
         df = load_data_from_sheets(sheet_urls_text, owner_username)
         if df is not None and not df.empty:
+            # סינון שורות תקינות בלבד מרשימת הבחורים
+            valid_students = []
+            for _, row in df.iterrows():
+                if len(row) >= 2:
+                    u = str(row[0]).strip()
+                    p = str(row[1]).strip()
+                    if u and p and u.lower() != "nan":
+                        valid_students.append((u, p))
+
+            total_students = len(valid_students)
+            if total_students == 0:
+                write_log(owner_username, "⚠️ לא נמצאו תלמידים תקינים בקובצי השיטס.")
+                return
+
+            # בדיקה אם מופעל מצב "חלוקה לפי משתמשים" (סבבים)
+            conf = get_config(owner_username)
+            split_by_users = conf.get("split_by_users", False)
+            batch_size = int(conf.get("batch_size", 50))
+            current_offset = int(conf.get("current_offset", 0))
+
+            if split_by_users and batch_size > 0:
+                # אם המיקום הנוכחי עבר את סוף הרשימה (למשל כי מחקו שורות בשיטס), מאפסים להתחלה
+                if current_offset >= total_students:
+                    current_offset = 0
+
+                end_index = min(current_offset + batch_size, total_students)
+                batch_students = valid_students[current_offset:end_index]
+
+                write_log(
+                    owner_username,
+                    f"👥 מצב סבבים פעיל: מריץ בחורים {current_offset + 1} עד {end_index} (מתוך {total_students} ברשימה)"
+                )
+
+                # חישוב המיקום לסבב הבא: אם הגענו לסוף הרשימה, עוצרים ומאפסים ל-0 לפעם הבאה
+                if end_index >= total_students:
+                    next_offset = 0
+                    write_log(owner_username, "🔄 סוף הרשימה הושלם בסבב זה! בפעם הבאה המערכת תתחיל מחדש מבחור מס' 1.")
+                else:
+                    next_offset = end_index
+                    write_log(owner_username, f"📌 מיקום נשמר: בפעם הבאה המערכת תמשיך מבחור מס' {next_offset + 1}.")
+
+                update_user_offset(owner_username, next_offset)
+            else:
+                batch_students = valid_students
+
             tasks = []
             with ThreadPoolExecutor(max_workers=MAX_WORKERS_PER_ACCOUNT) as executor:
-                for _, row in df.iterrows():
-                    if len(row) >= 2:
-                        u = str(row[0]).strip()
-                        p = str(row[1]).strip()
-                        if u and p and u.lower() != "nan":
-                            tasks.append(executor.submit(run_single_student, u, p, num_videos, owner_username))
+                for u, p in batch_students:
+                    tasks.append(executor.submit(run_single_student, u, p, num_videos, owner_username))
                 for task in tasks:
                     task.result()
             write_log(owner_username, f"✅ סיום הרצה {run_type} בהצלחה.")
@@ -339,6 +390,21 @@ start_global_scheduler()
 # --- ממשק משתמש ---
 st.set_page_config(page_title="מערכת אוטומציה למדם", layout="centered", page_icon="🤖")
 
+# תיקון עיצוב לסליידר: שומר על הסליידר משמאל לימין כדי שהנקודה והפס האדום יהיו מסונכרנים בול עם המספר
+st.markdown("""
+<style>
+div[data-testid="stSlider"] > label {
+    direction: rtl;
+    text-align: right;
+    width: 100%;
+    display: block;
+}
+div[data-testid="stSlider"] div[data-baseweb="slider"] {
+    direction: ltr !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -376,6 +442,16 @@ else:
         st.info(f"🕒 זמן הפעלה: {saved_config.get('time')} | ימים: {', '.join(saved_config.get('days', []))}")
         st.info(f"📺 כמות שיעורים לתלמיד: {saved_config.get('videos')}")
 
+        if saved_config.get("split_by_users", False):
+            b_size = saved_config.get("batch_size", 50)
+            c_offset = saved_config.get("current_offset", 0)
+            st.info(f"👥 חלוקה לפי משתמשים פעילה: {b_size} בחורים בסבב | ההרצה הבאה תתחיל מבחור מס' {c_offset + 1}")
+            if st.button("🔄 אפס סבב בחורים להתחלה (בחור מס' 1)"):
+                update_user_offset(current_user, 0)
+                st.toast("המיקום אופס! ההרצה הבאה תתחיל מבחור מס' 1", icon="🔄")
+                time.sleep(1)
+                st.rerun()
+
         if st.button("✏️ שחרר נעילה לעריכה"):
             unlock_config(current_user)
             st.rerun()
@@ -403,6 +479,9 @@ else:
             default_time = dt_time(15, 0)
         default_videos = saved_config.get("videos", 3)
         default_sheet = saved_config.get("sheet_url", "")
+        default_split = saved_config.get("split_by_users", False)
+        default_batch = int(saved_config.get("batch_size", 50))
+        saved_offset = int(saved_config.get("current_offset", 0))
 
         col1, col2 = st.columns(2)
         with col1:
@@ -415,6 +494,21 @@ else:
             selected_time = st.time_input("שעת התחלה", value=default_time)
 
         num_videos = st.slider("כמות שיעורים", 1, 10, value=default_videos)
+
+        st.markdown("---")
+        split_by_users = st.checkbox("👥 חלוקה לפי משתמשים (הרצה בסבבים יומיים)", value=default_split)
+        if split_by_users:
+            batch_size = st.number_input(
+                "כמות בחורים בכל סבב (למשל 50):",
+                min_value=1,
+                max_value=5000,
+                value=default_batch,
+                step=5
+            )
+            st.caption(f"📌 מיקום נוכחי בזיכרון: יתחיל מבחור מס' {saved_offset + 1} (כשמגיע לסוף הרשימה, עוצר ומתחיל מחדש ביום הבא).")
+        else:
+            batch_size = default_batch
+
         sheet_url_input = st.text_area(
             "קישורים לשיטס (Public) - אפשר להכניס כמה קישורים, כל קישור בשורה נפרדת:",
             value=default_sheet,
@@ -423,7 +517,16 @@ else:
 
         if st.button("🔒 שמור ונעל הגדרות עבורי", type="primary"):
             if sheet_url_input and "http" in sheet_url_input:
-                save_config_to_disk(current_user, sheet_url_input, selected_days, selected_time, num_videos)
+                save_config_to_disk(
+                    current_user,
+                    sheet_url_input,
+                    selected_days,
+                    selected_time,
+                    num_videos,
+                    split_by_users=split_by_users,
+                    batch_size=batch_size,
+                    current_offset=saved_offset
+                )
                 st.rerun()
             else:
                 st.error("חובה להזין לפחות קישור תקין אחד לשיטס")
