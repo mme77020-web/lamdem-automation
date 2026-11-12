@@ -287,7 +287,6 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
         write_log(owner_username, f"--- התחלת הרצה {run_type} ---")
         df = load_data_from_sheets(sheet_urls_text, owner_username)
         if df is not None and not df.empty:
-            # סינון שורות תקינות בלבד מרשימת הבחורים
             valid_students = []
             for _, row in df.iterrows():
                 if len(row) >= 2:
@@ -301,14 +300,12 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
                 write_log(owner_username, "⚠️ לא נמצאו תלמידים תקינים בקובצי השיטס.")
                 return
 
-            # בדיקה אם מופעל מצב "חלוקה לפי משתמשים" (סבבים)
             conf = get_config(owner_username)
             split_by_users = conf.get("split_by_users", False)
             batch_size = int(conf.get("batch_size", 50))
             current_offset = int(conf.get("current_offset", 0))
 
             if split_by_users and batch_size > 0:
-                # אם המיקום הנוכחי עבר את סוף הרשימה (למשל כי מחקו שורות בשיטס), מאפסים להתחלה
                 if current_offset >= total_students:
                     current_offset = 0
 
@@ -320,7 +317,6 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
                     f"👥 מצב סבבים פעיל: מריץ בחורים {current_offset + 1} עד {end_index} (מתוך {total_students} ברשימה)"
                 )
 
-                # חישוב המיקום לסבב הבא: אם הגענו לסוף הרשימה, עוצרים ומאפסים ל-0 לפעם הבאה
                 if end_index >= total_students:
                     next_offset = 0
                     write_log(owner_username, "🔄 סוף הרשימה הושלם בסבב זה! בפעם הבאה המערכת תתחיל מחדש מבחור מס' 1.")
@@ -390,17 +386,19 @@ start_global_scheduler()
 # --- ממשק משתמש ---
 st.set_page_config(page_title="מערכת אוטומציה למדם", layout="centered", page_icon="🤖")
 
-# תיקון עיצוב לסליידר: שומר על הסליידר משמאל לימין כדי שהנקודה והפס האדום יהיו מסונכרנים בול עם המספר
+# תיקון עמוק לסליידר: כופה כיוון LTR על כל תתי-האלמנטים של הסליידר כדי שהכדור והפס האדום יתלכדו ב-100%
 st.markdown("""
 <style>
-div[data-testid="stSlider"] > label {
-    direction: rtl;
-    text-align: right;
-    width: 100%;
-    display: block;
-}
-div[data-testid="stSlider"] div[data-baseweb="slider"] {
+div[data-testid="stSlider"],
+div[data-testid="stSlider"] * {
     direction: ltr !important;
+}
+div[data-testid="stSlider"] label,
+div[data-testid="stSlider"] [data-testid="stWidgetLabel"] p {
+    direction: rtl !important;
+    text-align: right !important;
+    width: 100% !important;
+    display: block !important;
 }
 </style>
 """, unsafe_allow_html=True)
