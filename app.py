@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import time
 from datetime import datetime, time as dt_time
@@ -72,7 +73,17 @@ def get_config(username):
             pass
     return {}
 
-def save_config_to_disk(username, sheet_urls_text, days, selected_time, videos, split_by_users=False, batch_size=50, current_offset=0):
+def save_config_to_disk(
+    username,
+    sheet_urls_text,
+    days,
+    selected_time,
+    videos,
+    split_by_users=False,
+    batch_size=50,
+    current_offset=0,
+    skip_presentations=False
+):
     filename = get_config_filename(username)
     config_data = {
         "username": username,
@@ -83,6 +94,7 @@ def save_config_to_disk(username, sheet_urls_text, days, selected_time, videos, 
         "split_by_users": split_by_users,
         "batch_size": int(batch_size),
         "current_offset": int(current_offset),
+        "skip_presentations": bool(skip_presentations),
         "is_locked": True
     }
     with file_lock:
@@ -166,7 +178,7 @@ def get_chrome_service():
     from webdriver_manager.core.os_manager import ChromeType
     return Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
 
-def run_single_student(student_user, student_pass, num_videos, owner_username):
+def run_single_student(student_user, student_pass, num_videos, owner_username, skip_presentations=False):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
@@ -232,6 +244,14 @@ def run_single_student(student_user, student_pass, num_videos, owner_username):
                         full_text = item.text.strip()
                         lines = [line.strip() for line in full_text.split('\n') if line.strip() and "play_circle" not in line]
                         clean_name = lines[0] if lines else "Lesson"
+
+                        # דילוג על שיעורים שבכותרת שלהם מופיע "מצגת למידה" אם האופציה מופעלת
+                        if skip_presentations and "מצגת למידה" in full_text:
+                            if clean_name not in blacklist:
+                                write_log(owner_username, f"⏭️ {student_user}: מדלג על '{clean_name}' (מצגת למידה)")
+                                blacklist.append(clean_name)
+                            continue
+
                         if clean_name not in blacklist:
                             target = item
                             lesson_name = clean_name
@@ -304,6 +324,7 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
             split_by_users = conf.get("split_by_users", False)
             batch_size = int(conf.get("batch_size", 50))
             current_offset = int(conf.get("current_offset", 0))
+            skip_presentations = conf.get("skip_presentations", False)
 
             if split_by_users and batch_size > 0:
                 if current_offset >= total_students:
@@ -331,7 +352,16 @@ def execute_account_job(owner_username, sheet_urls_text, num_videos, run_type="�
             tasks = []
             with ThreadPoolExecutor(max_workers=MAX_WORKERS_PER_ACCOUNT) as executor:
                 for u, p in batch_students:
-                    tasks.append(executor.submit(run_single_student, u, p, num_videos, owner_username))
+                    tasks.append(
+                        executor.submit(
+                            run_single_student,
+                            u,
+                            p,
+                            num_videos,
+                            owner_username,
+                            skip_presentations
+                        )
+                    )
                 for task in tasks:
                     task.result()
             write_log(owner_username, f"✅ סיום הרצה {run_type} בהצלחה.")
@@ -386,22 +416,45 @@ start_global_scheduler()
 # --- ממשק משתמש ---
 st.set_page_config(page_title="מערכת אוטומציה למדם", layout="centered", page_icon="🤖")
 
-# תיקון עמוק לסליידר: כופה כיוון LTR על כל תתי-האלמנטים של הסליידר כדי שהכדור והפס האדום יתלכדו ב-100%
+# תיקון עמוק לסליידר: כופה כיוון LTR על הרכיב ומבטל היפוך ימין-שמאל של הכדור כדי שהפס האדום והמספר יתלכדו ב-100%
 st.markdown("""
 <style>
 div[data-testid="stSlider"],
 div[data-testid="stSlider"] * {
     direction: ltr !important;
+    text-align: left !important;
 }
-div[data-testid="stSlider"] label,
+div[data-testid="stSlider"] [role="slider"] {
+    right: auto !important;
+}
+div[data-testid="stSlider"] [data-testid="stWidgetLabel"],
 div[data-testid="stSlider"] [data-testid="stWidgetLabel"] p {
     direction: rtl !important;
     text-align: right !important;
     width: 100% !important;
     display: block !important;
 }
+iframe[height="0"] {
+    display: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
+components.html("""
+<script>
+const syncSliders = () => {
+    const doc = window.parent.document;
+    doc.querySelectorAll('div[data-testid="stSlider"]').forEach(el => {
+        if (el.getAttribute('dir') !== 'ltr') {
+            el.setAttribute('dir', 'ltr');
+            el.style.direction = 'ltr';
+        }
+    });
+};
+syncSliders();
+setInterval(syncSliders, 400);
+</script>
+""", height=0, width=0)
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -439,6 +492,9 @@ else:
         st.info(f"📄 כמות קובצי שיטס פעילים בחשבון: {len(sheets_list)}")
         st.info(f"🕒 זמן הפעלה: {saved_config.get('time')} | ימים: {', '.join(saved_config.get('days', []))}")
         st.info(f"📺 כמות שיעורים לתלמיד: {saved_config.get('videos')}")
+
+        skip_status = "פעיל (מדלג על מצגות למידה)" if saved_config.get("skip_presentations", False) else "כבוי (צופה בכל השיעורים)"
+        st.info(f"⏭️ דילוג על מצגת למידה: {skip_status}")
 
         if saved_config.get("split_by_users", False):
             b_size = saved_config.get("batch_size", 50)
@@ -480,6 +536,7 @@ else:
         default_split = saved_config.get("split_by_users", False)
         default_batch = int(saved_config.get("batch_size", 50))
         saved_offset = int(saved_config.get("current_offset", 0))
+        default_skip_pres = saved_config.get("skip_presentations", False)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -492,6 +549,11 @@ else:
             selected_time = st.time_input("שעת התחלה", value=default_time)
 
         num_videos = st.slider("כמות שיעורים", 1, 10, value=default_videos)
+
+        skip_presentations = st.checkbox(
+            "⏭️ דילוג על 'מצגת למידה' (לא לצפות בסרטונים שבכותרת שלהם מופיע מצגת למידה)",
+            value=default_skip_pres
+        )
 
         st.markdown("---")
         split_by_users = st.checkbox("👥 חלוקה לפי משתמשים (הרצה בסבבים יומיים)", value=default_split)
@@ -523,7 +585,8 @@ else:
                     num_videos,
                     split_by_users=split_by_users,
                     batch_size=batch_size,
-                    current_offset=saved_offset
+                    current_offset=saved_offset,
+                    skip_presentations=skip_presentations
                 )
                 st.rerun()
             else:
