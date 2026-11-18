@@ -169,6 +169,58 @@ def solve_lesson_video(driver, By, owner_username, student_user):
         pass
     return False
 
+def find_available_lesson(driver, By, blacklist, skip_presentations, owner_username, student_user):
+    """מחפש שיעור פתוח לביצוע מבין הנושאים שפתוחים כרגע בדף"""
+    items = driver.find_elements(By.TAG_NAME, "mat-list-item")
+    for item in items:
+        try:
+            if not item.is_displayed():
+                continue
+            html = item.get_attribute("innerHTML") or ""
+            if "play_circle" in html and "check_circle" not in html:
+                full_text = item.text.strip()
+                lines = [line.strip() for line in full_text.split('\n') if line.strip() and "play_circle" not in line]
+                clean_name = lines[0] if lines else "Lesson"
+
+                if skip_presentations and "מצגת למידה" in full_text:
+                    if clean_name not in blacklist:
+                        write_log(owner_username, f"⏭️ {student_user}: מדלג על '{clean_name}' (מצגת למידה)")
+                        blacklist.append(clean_name)
+                    continue
+
+                if clean_name not in blacklist:
+                    return item, clean_name
+        except Exception:
+            continue
+    return None, "Unknown"
+
+def open_next_closed_section(driver, By, owner_username, student_user):
+    """מוצא את הנושא הסגור הבא בדף ופותח אותו בלחיצה"""
+    # חיפוש כותרות של פאנלים מתקפלים שעדיין סגורים
+    headers = driver.find_elements(
+        By.CSS_SELECTOR,
+        "mat-expansion-panel-header[aria-expanded='false'], "
+        "mat-expansion-panel:not(.mat-expanded) mat-expansion-panel-header, "
+        "[aria-expanded='false']"
+    )
+    for h in headers:
+        try:
+            if not h.is_displayed():
+                continue
+            raw_text = h.text.strip()
+            lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+            section_title = lines[0] if lines else "נושא הבא"
+            
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", h)
+            time.sleep(1)
+            driver.execute_script("arguments[0].click();", h)
+            write_log(owner_username, f"📂 {student_user}: סיים נושא נוכחי, פותח את הנושא הבא ('{section_title}')")
+            time.sleep(3)
+            return True
+        except Exception:
+            continue
+    return False
+
 def get_chrome_service():
     from selenium.webdriver.chrome.service import Service
     sys_driver = shutil.which("chromedriver") or "/usr/bin/chromedriver"
@@ -234,31 +286,22 @@ def run_single_student(student_user, student_pass, num_videos, owner_username, s
                 driver.get(course_url)
                 time.sleep(8)
                 
-                items = driver.find_elements(By.TAG_NAME, "mat-list-item")
-                target = None
-                lesson_name = "Unknown"
+                # 1. חיפוש שיעור בנושא שפתוח כרגע
+                target, lesson_name = find_available_lesson(
+                    driver, By, blacklist, skip_presentations, owner_username, student_user
+                )
                 
-                for item in items:
-                    html = item.get_attribute("innerHTML")
-                    if "play_circle" in html and "check_circle" not in html:
-                        full_text = item.text.strip()
-                        lines = [line.strip() for line in full_text.split('\n') if line.strip() and "play_circle" not in line]
-                        clean_name = lines[0] if lines else "Lesson"
-
-                        # דילוג על שיעורים שבכותרת שלהם מופיע "מצגת למידה" אם האופציה מופעלת
-                        if skip_presentations and "מצגת למידה" in full_text:
-                            if clean_name not in blacklist:
-                                write_log(owner_username, f"⏭️ {student_user}: מדלג על '{clean_name}' (מצגת למידה)")
-                                blacklist.append(clean_name)
-                            continue
-
-                        if clean_name not in blacklist:
-                            target = item
-                            lesson_name = clean_name
-                            break
+                # 2. אם אין שיעורים בנושא הנוכחי, פותחים אוטומטית את הנושא הסגור הבא ובודקים בו
+                while not target:
+                    opened_next = open_next_closed_section(driver, By, owner_username, student_user)
+                    if not opened_next:
+                        break
+                    target, lesson_name = find_available_lesson(
+                        driver, By, blacklist, skip_presentations, owner_username, student_user
+                    )
                 
                 if not target:
-                    write_log(owner_username, f"🏁 {student_user}: אין יותר שיעורים פתוחים לביצוע")
+                    write_log(owner_username, f"🏁 {student_user}: אין יותר שיעורים פתוחים לביצוע בכל הנושאים")
                     break
                 
                 write_log(owner_username, f"📺 {student_user} [{i+1}/{num_videos}] עובד על: {lesson_name}")
@@ -416,7 +459,7 @@ start_global_scheduler()
 # --- ממשק משתמש ---
 st.set_page_config(page_title="מערכת אוטומציה למדם", layout="centered", page_icon="🤖")
 
-# תיקון עמוק לסליידר: כופה כיוון LTR על הרכיב ומבטל היפוך ימין-שמאל של הכדור כדי שהפס האדום והמספר יתלכדו ב-100%
+# תיקון עמוק לסליידר
 st.markdown("""
 <style>
 div[data-testid="stSlider"],
