@@ -169,8 +169,8 @@ def solve_lesson_video(driver, By, owner_username, student_user):
         pass
     return False
 
-def find_available_lesson(driver, By, blacklist, skip_presentations, owner_username, student_user):
-    """מחפש שיעור פתוח לביצוע מבין הנושאים שפתוחים כרגע בדף"""
+def find_available_lesson(driver, By, blacklist, skip_presentations):
+    """מחפש שיעור פתוח שאינו מצגת למידה ואינו בבלקליסט מבלי להשבית את הלוג"""
     items = driver.find_elements(By.TAG_NAME, "mat-list-item")
     for item in items:
         try:
@@ -182,10 +182,8 @@ def find_available_lesson(driver, By, blacklist, skip_presentations, owner_usern
                 lines = [line.strip() for line in full_text.split('\n') if line.strip() and "play_circle" not in line]
                 clean_name = lines[0] if lines else "Lesson"
 
+                # דילוג שקט על מצגות למידה (כמו שיעורים שסומנו) מבלי להוסיף ללוג
                 if skip_presentations and "מצגת למידה" in full_text:
-                    if clean_name not in blacklist:
-                        write_log(owner_username, f"⏭️ {student_user}: מדלג על '{clean_name}' (מצגת למידה)")
-                        blacklist.append(clean_name)
                     continue
 
                 if clean_name not in blacklist:
@@ -196,7 +194,6 @@ def find_available_lesson(driver, By, blacklist, skip_presentations, owner_usern
 
 def open_next_closed_section(driver, By, owner_username, student_user):
     """מוצא את הנושא הסגור הבא בדף ופותח אותו בלחיצה"""
-    # חיפוש כותרות של פאנלים מתקפלים שעדיין סגורים
     headers = driver.find_elements(
         By.CSS_SELECTOR,
         "mat-expansion-panel-header[aria-expanded='false'], "
@@ -286,19 +283,15 @@ def run_single_student(student_user, student_pass, num_videos, owner_username, s
                 driver.get(course_url)
                 time.sleep(8)
                 
-                # 1. חיפוש שיעור בנושא שפתוח כרגע
-                target, lesson_name = find_available_lesson(
-                    driver, By, blacklist, skip_presentations, owner_username, student_user
-                )
+                # 1. חיפוש שיעור פתוח (הדילוג על מצגות מתבצע שקט ברקע)
+                target, lesson_name = find_available_lesson(driver, By, blacklist, skip_presentations)
                 
-                # 2. אם אין שיעורים בנושא הנוכחי, פותחים אוטומטית את הנושא הסגור הבא ובודקים בו
+                # 2. אם אין שיעורים בנושא הנוכחי, פותחים את הנושא הסגור הבא
                 while not target:
                     opened_next = open_next_closed_section(driver, By, owner_username, student_user)
                     if not opened_next:
                         break
-                    target, lesson_name = find_available_lesson(
-                        driver, By, blacklist, skip_presentations, owner_username, student_user
-                    )
+                    target, lesson_name = find_available_lesson(driver, By, blacklist, skip_presentations)
                 
                 if not target:
                     write_log(owner_username, f"🏁 {student_user}: אין יותר שיעורים פתוחים לביצוע בכל הנושאים")
@@ -536,7 +529,7 @@ else:
         st.info(f"🕒 זמן הפעלה: {saved_config.get('time')} | ימים: {', '.join(saved_config.get('days', []))}")
         st.info(f"📺 כמות שיעורים לתלמיד: {saved_config.get('videos')}")
 
-        skip_status = "פעיל (מדלג על מצגות למידה)" if saved_config.get("skip_presentations", False) else "כבוי (צופה בכל השיעורים)"
+        skip_status = "פעיל (מדלג שקט על מצגות למידה)" if saved_config.get("skip_presentations", False) else "כבוי (צופה בכל השיעורים)"
         st.info(f"⏭️ דילוג על מצגת למידה: {skip_status}")
 
         if saved_config.get("split_by_users", False):
@@ -594,7 +587,7 @@ else:
         num_videos = st.slider("כמות שיעורים", 1, 10, value=default_videos)
 
         skip_presentations = st.checkbox(
-            "⏭️ דילוג על 'מצגת למידה' (לא לצפות בסרטונים שבכותרת שלהם מופיע מצגת למידה)",
+            "⏭️ דילוג שקט על 'מצגת למידה' (סינון אוטומטי מבלי להעמיס על הלוג)",
             value=default_skip_pres
         )
 
